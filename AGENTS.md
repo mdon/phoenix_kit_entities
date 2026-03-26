@@ -117,10 +117,13 @@ gh release create 0.1.0 \
 
 1. Update version in `mix.exs`, `lib/phoenix_kit_entities.ex` (`version/0`), and the version test
 2. Add changelog entry in `CHANGELOG.md`
-3. Commit: `"Bump version to x.y.z"`
-4. Push to main
-5. Create and push git tag: `git tag x.y.z && git push origin x.y.z`
-6. Create GitHub release: `gh release create x.y.z --title "x.y.z - YYYY-MM-DD" --notes "..."`
+3. Run `mix precommit` — ensure zero warnings/errors before proceeding
+4. Commit all changes: `"Bump version to x.y.z"`
+5. Push to main and **verify the push succeeded** before tagging
+6. Create and push git tag: `git tag x.y.z && git push origin x.y.z`
+7. Create GitHub release: `gh release create x.y.z --title "x.y.z - YYYY-MM-DD" --notes "..."`
+
+**IMPORTANT:** Never tag or create a release before all changes are committed and pushed. Tags are immutable pointers — tagging before pushing means the release points to the wrong commit.
 
 ## Pull Requests
 
@@ -137,6 +140,18 @@ PR review files go in `dev_docs/pull_requests/{year}/{pr_number}-{slug}/` direct
 - Unit tests run without a database (changesets, field types, events, validation)
 - Integration tests tagged `:integration` require PostgreSQL: `createdb phoenix_kit_entities_test`
 - Test helper auto-detects database availability and excludes integration tests if unavailable
+
+## Installation Note
+
+Host apps must register the route module explicitly in config due to compile-time ordering (the router may compile before this dep is discovered):
+
+```elixir
+# config/config.exs
+config :phoenix_kit,
+  route_modules: [PhoenixKitEntities.Routes]
+```
+
+Without this, admin routes (`/admin/entities`, `/admin/settings/entities`, etc.) will return `NoRouteError`.
 
 ## External Dependencies
 
