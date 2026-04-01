@@ -229,7 +229,7 @@ defmodule PhoenixKitEntities.Web.Entities do
                         </.link>
                       </.table_default_cell>
                       <.table_default_cell>
-                        <.content_status_badge status={entity.status} />
+                        <.status_badge status={entity.status} />
                       </.table_default_cell>
                       <.table_default_cell>
                         <div class="flex items-center gap-1">
@@ -329,7 +329,7 @@ defmodule PhoenixKitEntities.Web.Entities do
                       </.link>
 
                       <%!-- Status Badge --%>
-                      <.content_status_badge status={entity.status} />
+                      <.status_badge status={entity.status} />
                     </div>
 
                     <%= if entity.description do %>
