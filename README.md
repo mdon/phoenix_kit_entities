@@ -39,7 +39,7 @@ Dynamic content types for PhoenixKit. Define custom entities (like "Product", "T
 Add to your parent app's `mix.exs`:
 
 ```elixir
-{:phoenix_kit_entities, path: "../phoenix_kit_entities"}
+{:phoenix_kit_entities, "~> 0.1"}
 ```
 
 Run `mix deps.get` and start the server. The module appears in:
