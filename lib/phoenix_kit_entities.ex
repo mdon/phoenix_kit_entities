@@ -849,7 +849,7 @@ defmodule PhoenixKitEntities do
   @impl PhoenixKit.Module
   def children, do: [PhoenixKitEntities.Presence]
 
-  def css_sources, do: ["phoenix_kit_entities"]
+  def css_sources, do: [:phoenix_kit_entities]
 
   @impl PhoenixKit.Module
   def version, do: "0.1.0"
