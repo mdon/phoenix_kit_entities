@@ -1862,7 +1862,7 @@ defmodule PhoenixKitEntities.Web.EntityForm do
                   <select
                     id="entity_status"
                     name={f[:status].name}
-                    class="select select-bordered w-full"
+                    class="select w-full"
                     required
                     disabled={@readonly?}
                   >
@@ -1889,7 +1889,7 @@ defmodule PhoenixKitEntities.Web.EntityForm do
                   <select
                     id="entity_sort_mode"
                     name="entities[sort_mode]"
-                    class="select select-bordered w-full"
+                    class="select w-full"
                     disabled={@readonly?}
                   >
                     <option
@@ -2342,7 +2342,7 @@ defmodule PhoenixKitEntities.Web.EntityForm do
                             <.label class="text-sm">{gettext("When triggered:")}</.label>
                             <select
                               name="public_form_honeypot_action"
-                              class="select select-bordered select-sm w-full max-w-xs mt-1"
+                              class="select select-sm w-full max-w-xs mt-1"
                               phx-change="update_security_action"
                               phx-value-setting="public_form_honeypot_action"
                               disabled={@readonly?}
@@ -2420,7 +2420,7 @@ defmodule PhoenixKitEntities.Web.EntityForm do
                             <.label class="text-sm">{gettext("When triggered:")}</.label>
                             <select
                               name="public_form_time_check_action"
-                              class="select select-bordered select-sm w-full max-w-xs mt-1"
+                              class="select select-sm w-full max-w-xs mt-1"
                               phx-change="update_security_action"
                               phx-value-setting="public_form_time_check_action"
                               disabled={@readonly?}
@@ -2498,7 +2498,7 @@ defmodule PhoenixKitEntities.Web.EntityForm do
                             <.label class="text-sm">{gettext("When triggered:")}</.label>
                             <select
                               name="public_form_rate_limit_action"
-                              class="select select-bordered select-sm w-full max-w-xs mt-1"
+                              class="select select-sm w-full max-w-xs mt-1"
                               phx-change="update_security_action"
                               phx-value-setting="public_form_rate_limit_action"
                               disabled={@readonly?}
@@ -2800,7 +2800,7 @@ defmodule PhoenixKitEntities.Web.EntityForm do
                   <.label>{gettext("Field Type")} *</.label>
                   <select
                     name="field[type]"
-                    class="select select-bordered w-full"
+                    class="select w-full"
                     phx-debounce="300"
                     value={@field_form["type"]}
                   >

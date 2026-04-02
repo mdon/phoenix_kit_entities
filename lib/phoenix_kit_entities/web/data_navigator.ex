@@ -825,7 +825,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                   <span class="label-text">{gettext("Filter by Status")}</span>
                 </label>
                 <.form for={%{}} phx-change="filter_by_status">
-                  <select class="select select-bordered w-full" name="status">
+                  <select class="select w-full" name="status">
                     <option value="all" selected={@selected_status == "all"}>
                       {gettext("All Statuses")}
                     </option>

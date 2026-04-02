@@ -1282,7 +1282,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
                     <.label for="phoenix_kit_entity_data_status">{gettext("Status")}</.label>
                     <select
                       name="phoenix_kit_entity_data[status]"
-                      class="select select-bordered w-full"
+                      class="select w-full"
                       disabled={@readonly?}
                     >
                       <option
@@ -1388,7 +1388,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
                     <.label for="phoenix_kit_entity_data_status">{gettext("Status")}</.label>
                     <select
                       name="phoenix_kit_entity_data[status]"
-                      class="select select-bordered w-full"
+                      class="select w-full"
                       disabled={@readonly?}
                     >
                       <option

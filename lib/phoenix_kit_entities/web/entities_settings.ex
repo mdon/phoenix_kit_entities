@@ -1159,7 +1159,7 @@ defmodule PhoenixKitEntities.Web.EntitiesSettings do
                             <% end %>
                           </div>
                           <select
-                            class="select select-sm select-bordered"
+                            class="select select-sm"
                             phx-change="set_definition_action"
                             phx-value-entity={entity.name}
                             name="action"
@@ -1271,7 +1271,7 @@ defmodule PhoenixKitEntities.Web.EntitiesSettings do
                                   <td class="truncate max-w-32">{record[:title] || "-"}</td>
                                   <td class="text-right">
                                     <select
-                                      class="select select-xs select-bordered"
+                                      class="select select-xs"
                                       phx-change="set_record_action"
                                       phx-value-entity={entity.name}
                                       phx-value-slug={record.slug}

@@ -504,7 +504,7 @@ defmodule PhoenixKitEntities.FormBuilder do
       </.label>
       <select
         name={"#{@changeset.data.__struct__.__schema__(:source)}[data][#{@field["key"]}]"}
-        class={["select select-bordered w-full", @opts[:input_class]]}
+        class={["select w-full", @opts[:input_class]]}
         required={@field["required"]}
         disabled={@opts[:disabled]}
       >
