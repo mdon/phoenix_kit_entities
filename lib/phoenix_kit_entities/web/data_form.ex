@@ -30,8 +30,8 @@ defmodule PhoenixKitEntities.Web.DataForm do
       params["locale"] || socket.assigns[:current_locale]
 
     # Edit mode with slug
-    entity = Entities.get_entity_by_name(entity_slug)
-    data_record = EntityData.get!(uuid)
+    entity = Entities.get_entity_by_name(entity_slug, lang: locale)
+    data_record = EntityData.get!(uuid, lang: locale)
     changeset = EntityData.change(data_record)
 
     mount_data_form(socket, entity, data_record, changeset, gettext("Edit Data"), locale)
@@ -43,8 +43,8 @@ defmodule PhoenixKitEntities.Web.DataForm do
       params["locale"] || socket.assigns[:current_locale]
 
     # Edit mode with ID (backwards compat)
-    entity = Entities.get_entity!(entity_uuid)
-    data_record = EntityData.get!(id)
+    entity = Entities.get_entity!(entity_uuid, lang: locale)
+    data_record = EntityData.get!(id, lang: locale)
     changeset = EntityData.change(data_record)
 
     mount_data_form(socket, entity, data_record, changeset, gettext("Edit Data"), locale)
@@ -56,7 +56,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
       params["locale"] || socket.assigns[:current_locale]
 
     # Create mode with slug
-    entity = Entities.get_entity_by_name(entity_slug)
+    entity = Entities.get_entity_by_name(entity_slug, lang: locale)
     data_record = %EntityData{entity_uuid: entity.uuid}
     changeset = EntityData.change(data_record)
 
@@ -69,7 +69,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
       params["locale"] || socket.assigns[:current_locale]
 
     # Create mode with ID (backwards compat)
-    entity = Entities.get_entity!(entity_uuid)
+    entity = Entities.get_entity!(entity_uuid, lang: locale)
     data_record = %EntityData{entity_uuid: entity.uuid}
     changeset = EntityData.change(data_record)
 
@@ -561,7 +561,8 @@ defmodule PhoenixKitEntities.Web.DataForm do
         {:noreply, socket}
 
       true ->
-        data_record = EntityData.get_data!(data_uuid)
+        locale = socket.assigns[:current_locale]
+        data_record = EntityData.get_data!(data_uuid, lang: locale)
         changeset = EntityData.change(data_record)
 
         socket =
@@ -606,7 +607,8 @@ defmodule PhoenixKitEntities.Web.DataForm do
 
   def handle_info({:entity_updated, entity_uuid}, socket) do
     if entity_uuid == socket.assigns.entity.uuid do
-      entity = Entities.get_entity!(entity_uuid)
+      locale = socket.assigns[:current_locale]
+      entity = Entities.get_entity!(entity_uuid, lang: locale)
 
       # If entity was archived or unpublished, redirect to entities list
       if entity.status != "published" do

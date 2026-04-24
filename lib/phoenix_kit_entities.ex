@@ -356,9 +356,10 @@ defmodule PhoenixKitEntities do
   Returns a lightweight list of published entity summaries for sidebar display.
 
   Selects only sidebar-relevant fields without preloading associations.
+  Supports `:lang` option for translation resolution.
   """
-  @spec list_entity_summaries() :: [map()]
-  def list_entity_summaries do
+  @spec list_entity_summaries(keyword()) :: [map()]
+  def list_entity_summaries(opts \\ []) do
     from(e in __MODULE__,
       where: e.status == "published",
       order_by: [desc: e.date_created],
@@ -366,10 +367,18 @@ defmodule PhoenixKitEntities do
         name: e.name,
         display_name: e.display_name,
         display_name_plural: e.display_name_plural,
-        icon: e.icon
+        description: e.description,
+        icon: e.icon,
+        settings: e.settings
       }
     )
     |> repo().all()
+    |> Enum.map(fn summary ->
+      # Convert map to struct for resolve_language, then back to map
+      struct(__MODULE__, summary)
+      |> maybe_resolve_lang(opts)
+      |> Map.take([:name, :display_name, :display_name_plural, :description, :icon, :settings])
+    end)
   end
 
   @doc """
@@ -763,7 +772,9 @@ defmodule PhoenixKitEntities do
     alias PhoenixKit.Dashboard.Registry, as: DashboardRegistry
 
     if DashboardRegistry.initialized?() do
-      :ets.delete(DashboardRegistry.ets_table(), @entities_cache_key)
+      # Delete all entries for this cache key across all locales
+      # Pattern matches: {{:entities_children_cache, _}, _, _}
+      :ets.match_delete(DashboardRegistry.ets_table(), {{@entities_cache_key, :_}, :_, :_})
     end
 
     :ok
@@ -771,7 +782,9 @@ defmodule PhoenixKitEntities do
 
   @doc "Dynamic children function for Entities sidebar tabs."
   def entities_children(_scope) do
-    cached_entity_summaries()
+    locale = Gettext.get_locale(PhoenixKitWeb.Gettext)
+
+    cached_entity_summaries(locale)
     |> Enum.with_index()
     |> Enum.map(fn {entity, idx} ->
       %Tab{
@@ -793,36 +806,38 @@ defmodule PhoenixKitEntities do
     _ -> []
   end
 
-  defp cached_entity_summaries do
+  defp cached_entity_summaries(locale) do
     alias PhoenixKit.Dashboard.Registry, as: DashboardRegistry
 
     if DashboardRegistry.initialized?() do
-      lookup_cached_entities(DashboardRegistry)
+      lookup_cached_entities(DashboardRegistry, locale)
     else
-      list_entity_summaries()
+      list_entity_summaries(lang: locale)
     end
   end
 
-  defp lookup_cached_entities(registry) do
-    case :ets.lookup(registry.ets_table(), @entities_cache_key) do
-      [{@entities_cache_key, entities, timestamp}] when is_integer(timestamp) ->
+  defp lookup_cached_entities(registry, locale) do
+    cache_key = {@entities_cache_key, locale}
+
+    case :ets.lookup(registry.ets_table(), cache_key) do
+      [{^cache_key, entities, timestamp}] when is_integer(timestamp) ->
         if System.monotonic_time(:millisecond) - timestamp < @entities_cache_ttl_ms,
           do: entities,
-          else: fetch_and_cache_entities()
+          else: fetch_and_cache_entities(locale)
 
       _ ->
-        fetch_and_cache_entities()
+        fetch_and_cache_entities(locale)
     end
   end
 
-  defp fetch_and_cache_entities do
+  defp fetch_and_cache_entities(locale) do
     alias PhoenixKit.Dashboard.Registry, as: DashboardRegistry
-    entities = list_entity_summaries()
+    entities = list_entity_summaries(lang: locale)
 
     if DashboardRegistry.initialized?() do
       :ets.insert(
         DashboardRegistry.ets_table(),
-        {@entities_cache_key, entities, System.monotonic_time(:millisecond)}
+        {{@entities_cache_key, locale}, entities, System.monotonic_time(:millisecond)}
       )
     end
 
@@ -1257,7 +1272,9 @@ defmodule PhoenixKitEntities do
       iex> resolve_language(entity, "en-US")  # primary language
       %PhoenixKitEntities{display_name: "Products", ...}
   """
-  @spec resolve_language(t(), String.t()) :: t()
+  @spec resolve_language(t(), String.t() | nil) :: t()
+  def resolve_language(entity, nil), do: entity
+
   def resolve_language(%__MODULE__{} = entity, lang_code) when is_binary(lang_code) do
     translation = get_entity_translation(entity, lang_code)
 
@@ -1282,13 +1299,15 @@ defmodule PhoenixKitEntities do
       iex> resolve_languages(entities, "es-ES")
       [%PhoenixKitEntities{display_name: "Productos"}, ...]
   """
-  @spec resolve_languages([t()], String.t()) :: [t()]
+  @spec resolve_languages([t()], String.t() | nil) :: [t()]
+  def resolve_languages(entities, nil), do: entities
+
   def resolve_languages(entities, lang_code) when is_list(entities) and is_binary(lang_code) do
     Enum.map(entities, &resolve_language(&1, lang_code))
   end
 
-  # Applies :lang option to a single entity if present in opts
-  defp maybe_resolve_lang(entity, opts) when is_list(opts) do
+  @doc false
+  def maybe_resolve_lang(entity, opts) when is_list(opts) do
     case Keyword.get(opts, :lang) do
       nil -> entity
       lang -> resolve_language(entity, lang)
