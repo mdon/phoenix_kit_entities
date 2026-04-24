@@ -1145,6 +1145,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
               type="submit"
               class="btn btn-primary"
               disabled={@readonly?}
+              phx-disable-with={gettext("Saving…")}
             >
               <%= if @data_record.uuid do %>
                 {gettext("Update %{entity}", entity: @entity.display_name)}
@@ -1476,6 +1477,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
               type="submit"
               class="btn btn-primary"
               disabled={@readonly?}
+              phx-disable-with={gettext("Saving…")}
             >
               <.icon name="hero-check" class="w-4 h-4 mr-2" />
               <%= if @data_record.uuid do %>

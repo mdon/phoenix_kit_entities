@@ -91,6 +91,79 @@ defmodule PhoenixKitEntities.EntityDataUrlTest do
     end
   end
 
+  describe "public_path/3 — translated slugs" do
+    test "uses secondary-language _slug override when locale is given" do
+      entity = %{name: "product", settings: %{"sitemap_url_pattern" => "/p/:slug"}}
+
+      record = %{
+        uuid: "uuid-1",
+        slug: "my-item",
+        data: %{
+          "en-US" => %{"_slug" => "my-item"},
+          "es-ES" => %{"_slug" => "mi-articulo"}
+        }
+      }
+
+      cache = empty_cache()
+
+      assert EntityData.public_path(entity, record, locale: "es-ES", routes_cache: cache) ==
+               "/p/mi-articulo"
+    end
+
+    test "falls back to primary slug when locale has no _slug override" do
+      entity = %{name: "product", settings: %{"sitemap_url_pattern" => "/p/:slug"}}
+
+      record = %{
+        uuid: "uuid-1",
+        slug: "my-item",
+        data: %{"es-ES" => %{"name" => "Mi Artículo"}}
+      }
+
+      cache = empty_cache()
+
+      assert EntityData.public_path(entity, record, locale: "es-ES", routes_cache: cache) ==
+               "/p/my-item"
+    end
+
+    test "ignores _slug override when no locale is given" do
+      entity = %{name: "product", settings: %{"sitemap_url_pattern" => "/p/:slug"}}
+
+      record = %{
+        uuid: "uuid-1",
+        slug: "my-item",
+        data: %{"es-ES" => %{"_slug" => "mi-articulo"}}
+      }
+
+      cache = empty_cache()
+
+      assert EntityData.public_path(entity, record, routes_cache: cache) == "/p/my-item"
+    end
+
+    test "empty _slug override falls back to primary" do
+      entity = %{name: "product", settings: %{"sitemap_url_pattern" => "/p/:slug"}}
+
+      record = %{
+        uuid: "uuid-1",
+        slug: "my-item",
+        data: %{"es-ES" => %{"_slug" => ""}}
+      }
+
+      cache = empty_cache()
+
+      assert EntityData.public_path(entity, record, locale: "es-ES", routes_cache: cache) ==
+               "/p/my-item"
+    end
+
+    test "nil data map does not crash" do
+      entity = %{name: "product", settings: %{"sitemap_url_pattern" => "/p/:slug"}}
+      record = %{uuid: "uuid-1", slug: "my-item", data: nil}
+      cache = empty_cache()
+
+      assert EntityData.public_path(entity, record, locale: "es-ES", routes_cache: cache) ==
+               "/p/my-item"
+    end
+  end
+
   describe "public_path/3 — defensive inputs" do
     test "nil settings on entity uses fallback pattern" do
       entity = %{name: "product", settings: nil}

@@ -284,22 +284,42 @@ defmodule PhoenixKitEntities do
   defp notify_entity_event({:ok, %__MODULE__{} = entity}, :created) do
     Events.broadcast_entity_created(entity.uuid)
     maybe_mirror_entity(entity)
+    log_entity_activity(entity, "entity.created")
     {:ok, entity}
   end
 
   defp notify_entity_event({:ok, %__MODULE__{} = entity}, :updated) do
     Events.broadcast_entity_updated(entity.uuid)
     maybe_mirror_entity(entity)
+    log_entity_activity(entity, "entity.updated")
     {:ok, entity}
   end
 
   defp notify_entity_event({:ok, %__MODULE__{} = entity}, :deleted) do
     Events.broadcast_entity_deleted(entity.uuid)
     maybe_delete_mirrored_entity(entity)
+    log_entity_activity(entity, "entity.deleted")
     {:ok, entity}
   end
 
   defp notify_entity_event(result, _event), do: result
+
+  # Records an entity-lifecycle activity entry. Non-crashing — see
+  # `PhoenixKitEntities.ActivityLog` for the guard semantics.
+  defp log_entity_activity(%__MODULE__{} = entity, action) do
+    PhoenixKitEntities.ActivityLog.log(%{
+      action: action,
+      mode: "manual",
+      actor_uuid: entity.created_by_uuid,
+      resource_type: "entity",
+      resource_uuid: entity.uuid,
+      metadata: %{
+        "name" => entity.name,
+        "display_name" => entity.display_name,
+        "status" => entity.status
+      }
+    })
+  end
 
   # Mirror export helpers for auto-sync (per-entity settings)
   defp maybe_mirror_entity(entity) do
@@ -795,11 +815,34 @@ defmodule PhoenixKitEntities do
     :ok
   end
 
-  @doc "Dynamic children function for Entities sidebar tabs."
+  @doc """
+  Dynamic children function for Entities sidebar tabs.
+
+  Supports both arities:
+  - `entities_children(scope, locale)` — preferred when phoenix_kit core
+    (>= pending `dynamic_children/2` release) passes the current locale
+    explicitly to the sidebar callback.
+  - `entities_children(scope)` — fallback that reads the locale from
+    `Gettext.get_locale/1`. Older core releases dispatch this form.
+  """
+  def entities_children(_scope, locale) when is_binary(locale) or is_nil(locale) do
+    cached_entity_summaries(locale || Gettext.get_locale(PhoenixKitWeb.Gettext))
+    |> build_entity_tabs()
+  rescue
+    _ -> []
+  end
+
   def entities_children(_scope) do
     locale = Gettext.get_locale(PhoenixKitWeb.Gettext)
 
     cached_entity_summaries(locale)
+    |> build_entity_tabs()
+  rescue
+    _ -> []
+  end
+
+  defp build_entity_tabs(summaries) do
+    summaries
     |> Enum.with_index()
     |> Enum.map(fn {entity, idx} ->
       %Tab{
@@ -817,8 +860,6 @@ defmodule PhoenixKitEntities do
         parent: :admin_entities
       }
     end)
-  rescue
-    _ -> []
   end
 
   defp cached_entity_summaries(locale) do

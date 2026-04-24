@@ -1633,6 +1633,7 @@ defmodule PhoenixKitEntities.Web.EntityForm do
               type="submit"
               class="btn btn-primary"
               disabled={!@changeset.valid? or @readonly?}
+              phx-disable-with={gettext("Saving…")}
             >
               {if @entity.uuid, do: gettext("Update Entity"), else: gettext("Create Entity")}
             </button>
@@ -2775,6 +2776,7 @@ defmodule PhoenixKitEntities.Web.EntityForm do
               type="submit"
               class="btn btn-primary"
               disabled={!@changeset.valid? or @readonly?}
+              phx-disable-with={gettext("Saving…")}
             >
               {if @entity.uuid, do: gettext("Update Entity"), else: gettext("Create Entity")}
             </button>
