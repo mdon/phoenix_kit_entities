@@ -408,8 +408,8 @@ defmodule PhoenixKitEntities.Web.EntityForm do
         socket = save_validated_field(socket, validated_field)
         reply_with_broadcast(socket)
       else
-        {:error, error_message} ->
-          socket = assign(socket, :field_error, error_message)
+        {:error, reason} ->
+          socket = assign(socket, :field_error, PhoenixKitEntities.Errors.message(reason))
           reply_with_broadcast(socket)
       end
     else
@@ -1232,14 +1232,25 @@ defmodule PhoenixKitEntities.Web.EntityForm do
     |> assign(:field_error, nil)
   end
 
+  # Threads the current user UUID through to context functions that
+  # accept `actor_uuid:` opts.
+  defp actor_opts(socket) do
+    case socket.assigns[:phoenix_kit_current_scope] do
+      %{user: %{uuid: uuid}} -> [actor_uuid: uuid]
+      _ -> []
+    end
+  end
+
   defp save_entity(socket, entity_params) do
+    opts = actor_opts(socket)
+
     if socket.assigns.entity.uuid do
       # Reload entity from database to ensure Ecto detects all changes
       # (socket.assigns.entity may have in-memory modifications that mask changes)
       fresh_entity = Entities.get_entity!(socket.assigns.entity.uuid)
-      Entities.update_entity(fresh_entity, entity_params)
+      Entities.update_entity(fresh_entity, entity_params, opts)
     else
-      Entities.create_entity(entity_params)
+      Entities.create_entity(entity_params, opts)
     end
   end
 

@@ -998,10 +998,21 @@ defmodule PhoenixKitEntities.Web.DataForm do
   end
 
   defp save_data_record(socket, data_params) do
+    opts = actor_opts(socket)
+
     if socket.assigns.data_record.uuid do
-      EntityData.update(socket.assigns.data_record, data_params)
+      EntityData.update(socket.assigns.data_record, data_params, opts)
     else
-      EntityData.create(data_params)
+      EntityData.create(data_params, opts)
+    end
+  end
+
+  # Threads the current user UUID through to context functions that
+  # accept `actor_uuid:` opts.
+  defp actor_opts(socket) do
+    case socket.assigns[:phoenix_kit_current_scope] do
+      %{user: %{uuid: uuid}} -> [actor_uuid: uuid]
+      _ -> []
     end
   end
 

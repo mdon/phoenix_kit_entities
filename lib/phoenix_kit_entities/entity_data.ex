@@ -392,36 +392,44 @@ defmodule PhoenixKitEntities.EntityData do
     end
   end
 
-  defp notify_data_event({:ok, %__MODULE__{} = entity_data}, :created) do
+  defp notify_data_event({:ok, %__MODULE__{} = entity_data}, :created, opts) do
     Events.broadcast_data_created(entity_data.entity_uuid, entity_data.uuid)
     maybe_mirror_data(entity_data)
-    log_data_activity(entity_data, "entity_data.created")
+    log_data_activity(entity_data, "entity_data.created", opts)
     {:ok, entity_data}
   end
 
-  defp notify_data_event({:ok, %__MODULE__{} = entity_data}, :updated) do
+  defp notify_data_event({:ok, %__MODULE__{} = entity_data}, :updated, opts) do
     Events.broadcast_data_updated(entity_data.entity_uuid, entity_data.uuid)
     maybe_mirror_data(entity_data)
-    log_data_activity(entity_data, "entity_data.updated")
+    log_data_activity(entity_data, "entity_data.updated", opts)
     {:ok, entity_data}
   end
 
-  defp notify_data_event({:ok, %__MODULE__{} = entity_data}, :deleted) do
+  defp notify_data_event({:ok, %__MODULE__{} = entity_data}, :deleted, opts) do
     Events.broadcast_data_deleted(entity_data.entity_uuid, entity_data.uuid)
     maybe_delete_mirrored_data(entity_data)
-    log_data_activity(entity_data, "entity_data.deleted")
+    log_data_activity(entity_data, "entity_data.deleted", opts)
     {:ok, entity_data}
   end
 
-  defp notify_data_event(result, _event), do: result
+  defp notify_data_event({:error, _} = result, event, opts) do
+    log_data_error_activity(event, opts)
+    result
+  end
 
-  # Records a data-record-lifecycle activity entry. Non-crashing — see
-  # `PhoenixKitEntities.ActivityLog` for the guard semantics.
-  defp log_data_activity(%__MODULE__{} = entity_data, action) do
+  defp notify_data_event(result, _event, _opts), do: result
+
+  # Records a data-record-lifecycle activity entry. Actor UUID comes
+  # from caller's `:actor_uuid` opt (the user performing the mutation)
+  # rather than `entity_data.created_by_uuid` (the original creator).
+  # Non-crashing — see `PhoenixKitEntities.ActivityLog` for the guard
+  # semantics.
+  defp log_data_activity(%__MODULE__{} = entity_data, action, opts) do
     PhoenixKitEntities.ActivityLog.log(%{
       action: action,
       mode: "manual",
-      actor_uuid: entity_data.created_by_uuid,
+      actor_uuid: Keyword.get(opts, :actor_uuid) || entity_data.created_by_uuid,
       resource_type: "entity_data",
       resource_uuid: entity_data.uuid,
       metadata: %{
@@ -430,6 +438,19 @@ defmodule PhoenixKitEntities.EntityData do
         "slug" => entity_data.slug,
         "status" => entity_data.status
       }
+    })
+  end
+
+  # Records a user-initiated data-record action even when the changeset
+  # failed. Marked with `db_pending: true` so consumers can distinguish
+  # from successful rows.
+  defp log_data_error_activity(event, opts) do
+    PhoenixKitEntities.ActivityLog.log(%{
+      action: "entity_data.#{event}",
+      mode: "manual",
+      actor_uuid: Keyword.get(opts, :actor_uuid),
+      resource_type: "entity_data",
+      metadata: %{"db_pending" => true}
     })
   end
 
@@ -634,7 +655,8 @@ defmodule PhoenixKitEntities.EntityData do
   but only if at least one user exists in the system. If no users exist, the changeset
   will fail with a validation error on `created_by`.
   """
-  def create(attrs \\ %{}) do
+  @spec create(map(), keyword()) :: {:ok, t()} | {:error, Ecto.Changeset.t()}
+  def create(attrs \\ %{}, opts \\ []) do
     # Transaction ensures next_position read + insert are atomic
     repo().transaction(fn ->
       attrs =
@@ -647,7 +669,7 @@ defmodule PhoenixKitEntities.EntityData do
         {:error, changeset} -> repo().rollback(changeset)
       end
     end)
-    |> notify_data_event(:created)
+    |> notify_data_event(:created, opts)
   end
 
   # Auto-fill created_by_uuid with first admin if not provided
@@ -869,11 +891,12 @@ defmodule PhoenixKitEntities.EntityData do
       iex> PhoenixKitEntities.EntityData.update(record, %{title: ""})
       {:error, %Ecto.Changeset{}}
   """
-  def update(%__MODULE__{} = entity_data, attrs) do
+  @spec update(t(), map(), keyword()) :: {:ok, t()} | {:error, Ecto.Changeset.t()}
+  def update(%__MODULE__{} = entity_data, attrs, opts \\ []) do
     entity_data
     |> changeset(attrs)
     |> repo().update()
-    |> notify_data_event(:updated)
+    |> notify_data_event(:updated, opts)
   end
 
   @doc """
@@ -887,9 +910,10 @@ defmodule PhoenixKitEntities.EntityData do
       iex> PhoenixKitEntities.EntityData.delete(record)
       {:error, %Ecto.Changeset{}}
   """
-  def delete(%__MODULE__{} = entity_data) do
+  @spec delete(t(), keyword()) :: {:ok, t()} | {:error, Ecto.Changeset.t()}
+  def delete(%__MODULE__{} = entity_data, opts \\ []) do
     repo().delete(entity_data)
-    |> notify_data_event(:deleted)
+    |> notify_data_event(:deleted, opts)
   end
 
   @doc """
@@ -1210,43 +1234,98 @@ defmodule PhoenixKitEntities.EntityData do
   @doc """
   Alias for delete/1 for consistency with LiveView naming.
   """
-  def delete_data(entity_data), do: __MODULE__.delete(entity_data)
+  @spec delete_data(t(), keyword()) :: {:ok, t()} | {:error, Ecto.Changeset.t()}
+  def delete_data(entity_data, opts \\ []), do: __MODULE__.delete(entity_data, opts)
 
   @doc """
   Alias for update/2 for consistency with LiveView naming.
   """
-  def update_data(entity_data, attrs), do: __MODULE__.update(entity_data, attrs)
+  @spec update_data(t(), map(), keyword()) :: {:ok, t()} | {:error, Ecto.Changeset.t()}
+  def update_data(entity_data, attrs, opts \\ []),
+    do: __MODULE__.update(entity_data, attrs, opts)
 
   @doc """
   Bulk updates the status of multiple records by UUIDs.
 
-  Returns a tuple with the count of updated records and nil.
+  Returns a tuple with the count of updated records and nil. Logs a
+  single `entity_data.bulk_status_changed` activity row carrying the
+  count + new status. Per-record `entity_data.updated` rows are NOT
+  emitted — bulk operations log at the operation level so the audit
+  trail doesn't explode.
+
+  ## Options
+
+    * `:actor_uuid` — UUID of the user performing the bulk update.
+      Threaded through to the activity log entry.
 
   ## Examples
 
-      iex> PhoenixKitEntities.EntityData.bulk_update_status(["uuid1", "uuid2"], "archived")
+      iex> PhoenixKitEntities.EntityData.bulk_update_status(["uuid1", "uuid2"], "archived",
+      ...>   actor_uuid: admin.uuid)
       {2, nil}
   """
-  def bulk_update_status(uuids, status) when is_list(uuids) and status in @valid_statuses do
+  @spec bulk_update_status([String.t()], String.t(), keyword()) :: {non_neg_integer(), nil}
+  def bulk_update_status(uuids, status, opts \\ [])
+      when is_list(uuids) and status in @valid_statuses do
     now = UtilsDate.utc_now()
 
-    from(d in __MODULE__, where: d.uuid in ^uuids)
-    |> repo().update_all(set: [status: status, date_updated: now])
+    {count, _} =
+      result =
+      from(d in __MODULE__, where: d.uuid in ^uuids)
+      |> repo().update_all(set: [status: status, date_updated: now])
+
+    PhoenixKitEntities.ActivityLog.log(%{
+      action: "entity_data.bulk_status_changed",
+      mode: "manual",
+      actor_uuid: Keyword.get(opts, :actor_uuid),
+      resource_type: "entity_data",
+      metadata: %{
+        "status" => status,
+        "count" => count,
+        "uuid_count" => length(uuids)
+      }
+    })
+
+    result
   end
 
   @doc """
   Bulk deletes multiple records by UUIDs.
 
-  Returns a tuple with the count of deleted records and nil.
+  Returns a tuple with the count of deleted records and nil. Logs a
+  single `entity_data.bulk_deleted` activity row carrying the count
+  (not the uuids — they're already gone, and listing them in metadata
+  bloats the audit row).
+
+  ## Options
+
+    * `:actor_uuid` — UUID of the user performing the bulk delete.
+      Threaded through to the activity log entry.
 
   ## Examples
 
-      iex> PhoenixKitEntities.EntityData.bulk_delete(["uuid1", "uuid2"])
+      iex> PhoenixKitEntities.EntityData.bulk_delete(["uuid1", "uuid2"], actor_uuid: admin.uuid)
       {2, nil}
   """
-  def bulk_delete(uuids) when is_list(uuids) do
-    from(d in __MODULE__, where: d.uuid in ^uuids)
-    |> repo().delete_all()
+  @spec bulk_delete([String.t()], keyword()) :: {non_neg_integer(), nil}
+  def bulk_delete(uuids, opts \\ []) when is_list(uuids) do
+    {count, _} =
+      result =
+      from(d in __MODULE__, where: d.uuid in ^uuids)
+      |> repo().delete_all()
+
+    PhoenixKitEntities.ActivityLog.log(%{
+      action: "entity_data.bulk_deleted",
+      mode: "manual",
+      actor_uuid: Keyword.get(opts, :actor_uuid),
+      resource_type: "entity_data",
+      metadata: %{
+        "count" => count,
+        "uuid_count" => length(uuids)
+      }
+    })
+
+    result
   end
 
   @doc """

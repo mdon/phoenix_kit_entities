@@ -386,7 +386,10 @@ defmodule PhoenixKitEntities.FieldTypes do
 
       iex> invalid_field = %{"type" => "invalid", "key" => "test"}
       iex> PhoenixKitEntities.FieldTypes.validate_field(invalid_field)
-      {:error, "Invalid field type: invalid"}
+      {:error, {:invalid_field_type, "invalid"}}
+
+  Error tuples flow through `PhoenixKitEntities.Errors.message/1` for
+  user-facing strings.
   """
   def validate_field(field) when is_map(field) do
     with {:ok, field} <- validate_required_keys(field),
@@ -402,7 +405,7 @@ defmodule PhoenixKitEntities.FieldTypes do
     if Enum.empty?(missing) do
       {:ok, field}
     else
-      {:error, "Missing required keys: #{Enum.join(missing, ", ")}"}
+      {:error, {:missing_required_keys, missing}}
     end
   end
 
@@ -410,7 +413,7 @@ defmodule PhoenixKitEntities.FieldTypes do
     if valid_type?(field["type"]) do
       {:ok, field}
     else
-      {:error, "Invalid field type: #{field["type"]}"}
+      {:error, {:invalid_field_type, to_string(field["type"])}}
     end
   end
 
@@ -421,7 +424,7 @@ defmodule PhoenixKitEntities.FieldTypes do
       if is_list(options) && not Enum.empty?(options) do
         {:ok, field}
       else
-        {:error, "Field type '#{field["type"]}' requires options"}
+        {:error, {:requires_options, to_string(field["type"])}}
       end
     else
       {:ok, field}

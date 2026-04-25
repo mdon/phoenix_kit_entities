@@ -114,7 +114,7 @@ defmodule PhoenixKitEntities.Web.EntitiesSettings do
   end
 
   def handle_event("enable_entities", _params, socket) do
-    case Entities.enable_system() do
+    case Entities.enable_system(actor_opts(socket)) do
       {:ok, _setting} ->
         settings = Map.put(socket.assigns.settings, :entities_enabled, true)
 
@@ -140,7 +140,7 @@ defmodule PhoenixKitEntities.Web.EntitiesSettings do
   end
 
   def handle_event("disable_entities", _params, socket) do
-    case Entities.disable_system() do
+    case Entities.disable_system(actor_opts(socket)) do
       {:ok, _setting} ->
         settings = Map.put(socket.assigns.settings, :entities_enabled, false)
 
@@ -539,6 +539,16 @@ defmodule PhoenixKitEntities.Web.EntitiesSettings do
   def handle_info(_message, socket), do: {:noreply, socket}
 
   # Private Functions
+
+  # Threads the current user UUID through to context functions that
+  # accept `actor_uuid:` opts. Returns `[]` for logged-out / system
+  # contexts so the activity row simply has `actor_uuid: nil`.
+  defp actor_opts(socket) do
+    case socket.assigns[:phoenix_kit_current_scope] do
+      %{user: %{uuid: uuid}} -> [actor_uuid: uuid]
+      _ -> []
+    end
+  end
 
   defp build_changeset(settings, action \\ nil) do
     types = %{

@@ -87,6 +87,16 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
     {:noreply, socket}
   end
 
+  # Threads the current user UUID through to context functions that
+  # accept `actor_uuid:` opts. Returns `[]` for logged-out / system
+  # contexts so the activity row simply has `actor_uuid: nil`.
+  defp actor_opts(socket) do
+    case socket.assigns[:phoenix_kit_current_scope] do
+      %{user: %{uuid: uuid}} -> [actor_uuid: uuid]
+      _ -> []
+    end
+  end
+
   # Resolve entity and entity_uuid from URL params
   defp resolve_entity_from_params(params, socket) do
     case params["entity_slug"] || params["entity_id"] do
@@ -245,7 +255,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
     if Scope.admin?(socket.assigns.phoenix_kit_current_scope) do
       data_record = EntityData.get!(uuid)
 
-      case EntityData.update_data(data_record, %{status: "archived"}) do
+      case EntityData.update_data(data_record, %{status: "archived"}, actor_opts(socket)) do
         {:ok, _data} ->
           socket =
             socket
@@ -267,7 +277,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
     if Scope.admin?(socket.assigns.phoenix_kit_current_scope) do
       data_record = EntityData.get!(uuid)
 
-      case EntityData.update_data(data_record, %{status: "published"}) do
+      case EntityData.update_data(data_record, %{status: "published"}, actor_opts(socket)) do
         {:ok, _data} ->
           socket =
             socket
@@ -296,7 +306,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
           "archived" -> "draft"
         end
 
-      case EntityData.update_data(data_record, %{status: new_status}) do
+      case EntityData.update_data(data_record, %{status: new_status}, actor_opts(socket)) do
         {:ok, _updated_data} ->
           socket =
             socket
@@ -345,7 +355,8 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
       if MapSet.size(uuids) == 0 do
         {:noreply, put_flash(socket, :error, gettext("No records selected"))}
       else
-        {count, _} = EntityData.bulk_update_status(MapSet.to_list(uuids), "archived")
+        {count, _} =
+          EntityData.bulk_update_status(MapSet.to_list(uuids), "archived", actor_opts(socket))
 
         {:noreply,
          socket
@@ -366,7 +377,8 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
       if MapSet.size(uuids) == 0 do
         {:noreply, put_flash(socket, :error, gettext("No records selected"))}
       else
-        {count, _} = EntityData.bulk_update_status(MapSet.to_list(uuids), "published")
+        {count, _} =
+          EntityData.bulk_update_status(MapSet.to_list(uuids), "published", actor_opts(socket))
 
         {:noreply,
          socket
@@ -387,7 +399,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
       if MapSet.size(uuids) == 0 do
         {:noreply, put_flash(socket, :error, gettext("No records selected"))}
       else
-        {count, _} = EntityData.bulk_delete(MapSet.to_list(uuids))
+        {count, _} = EntityData.bulk_delete(MapSet.to_list(uuids), actor_opts(socket))
 
         {:noreply,
          socket
@@ -408,7 +420,8 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
       if MapSet.size(uuids) == 0 do
         {:noreply, put_flash(socket, :error, gettext("No records selected"))}
       else
-        {count, _} = EntityData.bulk_update_status(MapSet.to_list(uuids), status)
+        {count, _} =
+          EntityData.bulk_update_status(MapSet.to_list(uuids), status, actor_opts(socket))
 
         {:noreply,
          socket
