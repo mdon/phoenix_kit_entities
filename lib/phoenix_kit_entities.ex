@@ -868,16 +868,29 @@ defmodule PhoenixKitEntities do
 
       iex> PhoenixKitEntities.get_config()
       %{enabled: false, max_per_user: 100, allow_relations: true, file_upload: false, entity_count: 0, total_data_count: 0}
+
+  Count queries are wrapped in `safe_count/1` so `get_config/0` works
+  outside of a sandbox checkout (e.g. unit-test contexts that don't
+  use `DataCase`) — same defensive pattern as `enabled?/0`.
   """
+  @spec get_config() :: map()
   def get_config do
     %{
       enabled: enabled?(),
       max_per_user: get_max_per_user(),
       allow_relations: Settings.get_boolean_setting("entities_allow_relations", true),
       file_upload: Settings.get_boolean_setting("entities_file_upload", false),
-      entity_count: count_entities(),
-      total_data_count: count_all_entity_data()
+      entity_count: safe_count(&count_entities/0),
+      total_data_count: safe_count(&count_all_entity_data/0)
     }
+  end
+
+  defp safe_count(fun) when is_function(fun, 0) do
+    fun.()
+  rescue
+    _ -> 0
+  catch
+    :exit, _ -> 0
   end
 
   # ============================================================================

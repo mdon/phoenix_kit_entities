@@ -50,6 +50,33 @@ defmodule PhoenixKitEntities.Test.Repo.Migrations.SetupPhoenixKit do
 
     create_if_not_exists(unique_index(:phoenix_kit_settings, [:key]))
 
+    # Users table — minimal subset of phoenix_kit core's V1 user schema.
+    # Required because `Entities.get_entity/2` preloads the `:creator`
+    # association, which issues a `SELECT ... FROM phoenix_kit_users`
+    # even when no users exist. Without this table the preload crashes
+    # with `relation "phoenix_kit_users" does not exist`.
+    create_if_not_exists table(:phoenix_kit_users, primary_key: false) do
+      add(:uuid, :uuid, primary_key: true, default: fragment("uuid_generate_v7()"))
+      add(:email, :string)
+      add(:username, :string)
+      add(:hashed_password, :string)
+      add(:first_name, :string)
+      add(:last_name, :string)
+      add(:is_active, :boolean, default: true)
+      add(:confirmed_at, :utc_datetime)
+      add(:user_timezone, :string)
+      add(:registration_ip, :string)
+      add(:registration_country, :string)
+      add(:registration_region, :string)
+      add(:registration_city, :string)
+      add(:custom_fields, :map, default: %{})
+      add(:account_type, :string, default: "personal")
+      add(:organization_name, :string)
+      add(:organization_uuid, :uuid)
+      add(:inserted_at, :utc_datetime, null: false, default: fragment("NOW()"))
+      add(:updated_at, :utc_datetime, null: false, default: fragment("NOW()"))
+    end
+
     create_if_not_exists table(:phoenix_kit_activities, primary_key: false) do
       add(:uuid, :binary_id, primary_key: true)
       add(:action, :string, null: false, size: 100)

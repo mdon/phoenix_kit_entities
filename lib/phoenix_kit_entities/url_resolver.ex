@@ -197,6 +197,7 @@ defmodule PhoenixKitEntities.UrlResolver do
   rescue
     e in [
       DBConnection.ConnectionError,
+      DBConnection.OwnershipError,
       Postgrex.Error,
       Ecto.QueryError,
       RuntimeError,
@@ -211,6 +212,7 @@ defmodule PhoenixKitEntities.UrlResolver do
   rescue
     e in [
       DBConnection.ConnectionError,
+      DBConnection.OwnershipError,
       Postgrex.Error,
       Ecto.QueryError,
       RuntimeError,
@@ -273,6 +275,7 @@ defmodule PhoenixKitEntities.UrlResolver do
   rescue
     e in [
       DBConnection.ConnectionError,
+      DBConnection.OwnershipError,
       Postgrex.Error,
       Ecto.QueryError,
       RuntimeError,
