@@ -117,6 +117,113 @@ defmodule PhoenixKitEntities.EntityMultilangTest do
     end
   end
 
+  describe "resolve_language/2 — dialect/base normalization" do
+    # Translations are stored under whatever key `set_entity_translation/3`
+    # saw — typically the dialect form. Callers may query with either dialect
+    # (`Gettext.get_locale/1` returns `"en-US"` etc.) or base (URL params
+    # expose `"en"`). Without normalization the dialect/base mismatch silently
+    # misses and the UI falls back to primary-language labels.
+
+    test "querying with base code matches stored dialect (es → es-ES)" do
+      entity = %Entities{
+        display_name: "Product",
+        settings: %{"translations" => %{"es-ES" => %{"display_name" => "Producto"}}}
+      }
+
+      assert Entities.resolve_language(entity, "es").display_name == "Producto"
+    end
+
+    test "querying with dialect matches stored base (es-ES → es)" do
+      entity = %Entities{
+        display_name: "Product",
+        settings: %{"translations" => %{"es" => %{"display_name" => "Producto"}}}
+      }
+
+      assert Entities.resolve_language(entity, "es-ES").display_name == "Producto"
+    end
+
+    test "exact match wins over base/dialect collapse" do
+      entity = %Entities{
+        display_name: "Product",
+        settings: %{
+          "translations" => %{
+            "es" => %{"display_name" => "Producto base"},
+            "es-ES" => %{"display_name" => "Producto España"}
+          }
+        }
+      }
+
+      # Asking for "es-ES" returns the exact-match value, not the base.
+      assert Entities.resolve_language(entity, "es-ES").display_name == "Producto España"
+    end
+
+    test "multiple dialects of the same base — deterministic via sort" do
+      entity = %Entities{
+        display_name: "Product",
+        settings: %{
+          "translations" => %{
+            "es-MX" => %{"display_name" => "Producto MX"},
+            "es-AR" => %{"display_name" => "Producto AR"}
+          }
+        }
+      }
+
+      # Querying base "es" picks the lowest-sorted dialect deterministically
+      # (es-AR sorts before es-MX), so the same input always yields the same
+      # output.
+      assert Entities.resolve_language(entity, "es").display_name == "Producto AR"
+    end
+  end
+
+  describe "resolve_language/2 — edge cases on free-text fields" do
+    test "Unicode characters round-trip intact (display_name)" do
+      entity = %Entities{
+        display_name: "Product",
+        settings: %{
+          "translations" => %{
+            "ja" => %{"display_name" => "製品 — 日本語 ✓"}
+          }
+        }
+      }
+
+      assert Entities.resolve_language(entity, "ja").display_name == "製品 — 日本語 ✓"
+    end
+
+    test "SQL-metacharacter literals in translated value (no SQL execution path)" do
+      payload = "Robert'); DROP TABLE entities;--"
+
+      entity = %Entities{
+        display_name: "Product",
+        settings: %{"translations" => %{"es" => %{"display_name" => payload}}}
+      }
+
+      # `resolve_language/2` is a pure transform — no SQL — so the literal
+      # round-trips. The point of this test is that the metacharacters don't
+      # interact with anything under the hood.
+      assert Entities.resolve_language(entity, "es").display_name == payload
+    end
+
+    test "very long translated string preserved (not silently truncated)" do
+      long = String.duplicate("a", 4096)
+
+      entity = %Entities{
+        display_name: "Product",
+        settings: %{"translations" => %{"es" => %{"description" => long}}}
+      }
+
+      assert Entities.resolve_language(entity, "es").description == long
+    end
+
+    test "translation value containing emoji round-trips intact" do
+      entity = %Entities{
+        display_name: "Product",
+        settings: %{"translations" => %{"es" => %{"display_name" => "Producto 🎯 ✅"}}}
+      }
+
+      assert Entities.resolve_language(entity, "es").display_name == "Producto 🎯 ✅"
+    end
+  end
+
   describe "resolve_languages/2" do
     test "empty list" do
       assert Entities.resolve_languages([], "es-ES") == []

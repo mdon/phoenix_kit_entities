@@ -22,6 +22,18 @@ defmodule PhoenixKitEntities.MixProject do
       # Dialyzer
       dialyzer: [plt_add_apps: [:phoenix_kit, :mix]],
 
+      # Coverage — exclude test-support modules so the percentage tracks
+      # production code, not boilerplate (DataCase, LiveCase, Test.Endpoint,
+      # postgres test migration, etc.).
+      test_coverage: [
+        ignore_modules: [
+          ~r/^PhoenixKitEntities\.Test\./,
+          PhoenixKitEntities.DataCase,
+          PhoenixKitEntities.LiveCase,
+          PhoenixKitEntities.ActivityLogAssertions
+        ]
+      ],
+
       # Docs
       name: "PhoenixKitEntities",
       source_url: @source_url,

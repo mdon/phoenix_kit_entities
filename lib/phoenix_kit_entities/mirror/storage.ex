@@ -27,6 +27,8 @@ defmodule PhoenixKitEntities.Mirror.Storage do
 
   """
 
+  require Logger
+
   alias PhoenixKit.Config
   alias PhoenixKit.Settings
 
@@ -123,7 +125,14 @@ defmodule PhoenixKitEntities.Mirror.Storage do
       true -> nil
     end
   rescue
-    _ -> nil
+    # Path.expand can raise on bizarre inputs (non-binary segments, etc.);
+    # treat as containment failure rather than letting the LV crash.
+    e in [ArgumentError, RuntimeError, FunctionClauseError] ->
+      Logger.debug(fn ->
+        "Storage.contained_path/1 fell back: #{Exception.message(e)}"
+      end)
+
+      nil
   end
 
   defp parent_app_root do
@@ -132,7 +141,14 @@ defmodule PhoenixKitEntities.Mirror.Storage do
       app -> Application.app_dir(app) |> Path.expand()
     end
   rescue
-    _ -> nil
+    # Application.app_dir raises ArgumentError when the app isn't loaded
+    # (e.g., before the parent app boots in some test paths).
+    e in [ArgumentError, RuntimeError] ->
+      Logger.debug(fn ->
+        "Storage.parent_app_root/0 fell back: #{Exception.message(e)}"
+      end)
+
+      nil
   end
 
   @doc """

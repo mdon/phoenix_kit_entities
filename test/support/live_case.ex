@@ -35,6 +35,8 @@ defmodule PhoenixKitEntities.LiveCase do
       @moduletag :integration
       @endpoint PhoenixKitEntities.Test.Endpoint
 
+      require Logger
+
       import Plug.Conn
       import Phoenix.ConnTest
       import Phoenix.LiveViewTest

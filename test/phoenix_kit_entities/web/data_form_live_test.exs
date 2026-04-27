@@ -198,6 +198,24 @@ defmodule PhoenixKitEntities.Web.DataFormLiveTest do
       send(view.pid, {:totally_unrelated, "junk", :payload})
       assert render(view) =~ "Edit DF Test"
     end
+
+    test "logs at :debug level so unexpected messages stay visible in dev",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, edit_url(ctx.entity, ctx.record))
+
+      previous = Logger.level()
+      Logger.configure(level: :debug)
+      on_exit(fn -> Logger.configure(level: previous) end)
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :debug], fn ->
+          send(view.pid, {:unhandled_in_test, :payload})
+          render(view)
+        end)
+
+      assert log =~ "DataForm: unhandled handle_info"
+    end
   end
 
   # ── helpers ──────────────────────────────────────────────────
