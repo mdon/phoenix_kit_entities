@@ -23,12 +23,23 @@ defmodule PhoenixKitEntities.ActivityLog do
       try do
         PhoenixKit.Activity.log(Map.put(attrs, :module, @module_key))
       rescue
+        # Sandbox-crossing in async tests, or test DB without the activities
+        # table present — both expected, swallow silently.
+        Postgrex.Error ->
+          :ok
+
+        DBConnection.OwnershipError ->
+          :ok
+
         error ->
           Logger.warning(
             "PhoenixKitEntities activity log failed: " <>
               "#{Exception.message(error)} — attrs=" <>
               inspect(Map.take(attrs, [:action, :resource_type, :resource_uuid]))
           )
+      catch
+        # Settings/Activity supervisor may exit during sandbox shutdown.
+        :exit, _reason -> :ok
       end
     end
 

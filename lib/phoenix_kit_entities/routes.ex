@@ -15,6 +15,7 @@ defmodule PhoenixKitEntities.Routes do
   @doc """
   Admin LiveView routes for the localized scope.
   """
+  @spec admin_locale_routes() :: Macro.t()
   def admin_locale_routes do
     quote do
       live("/admin/entities", PhoenixKitEntities.Web.Entities, :index, as: :entities_localized)
@@ -67,6 +68,7 @@ defmodule PhoenixKitEntities.Routes do
   @doc """
   Admin LiveView routes for the non-localized scope.
   """
+  @spec admin_routes() :: Macro.t()
   def admin_routes do
     quote do
       live("/admin/entities", PhoenixKitEntities.Web.Entities, :index, as: :entities)
@@ -117,6 +119,7 @@ defmodule PhoenixKitEntities.Routes do
   @doc """
   Public routes for entity form submissions.
   """
+  @spec generate(String.t()) :: Macro.t()
   def generate(url_prefix) do
     quote do
       scope unquote(url_prefix) do

@@ -7,6 +7,8 @@ defmodule PhoenixKitEntities.Web.DataForm do
   use PhoenixKitWeb, :live_view
   on_mount(PhoenixKitEntities.Web.Hooks)
 
+  require Logger
+
   import PhoenixKitWeb.Components.MultilangForm
 
   alias PhoenixKit.Settings
@@ -679,8 +681,15 @@ defmodule PhoenixKitEntities.Web.DataForm do
     end
   end
 
-  # Catch-all — ignore unexpected messages rather than crashing the socket.
-  def handle_info(_message, socket), do: {:noreply, socket}
+  # Catch-all — log at :debug rather than crashing the socket so unexpected
+  # messages stay visible during development without producing noise in prod.
+  def handle_info(message, socket) do
+    Logger.debug(fn ->
+      "DataForm: unhandled handle_info — #{inspect(message)}"
+    end)
+
+    {:noreply, socket}
+  end
 
   # Strip lang_title/lang_slug from params — these are translation input names
   # that shouldn't be passed to the changeset as DB fields.

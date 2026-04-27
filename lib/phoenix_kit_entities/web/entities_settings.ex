@@ -7,6 +7,8 @@ defmodule PhoenixKitEntities.Web.EntitiesSettings do
   use PhoenixKitWeb, :live_view
   on_mount(PhoenixKitEntities.Web.Hooks)
 
+  require Logger
+
   alias PhoenixKit.Settings
   alias PhoenixKitEntities, as: Entities
   alias PhoenixKitEntities.EntityData
@@ -540,8 +542,15 @@ defmodule PhoenixKitEntities.Web.EntitiesSettings do
     {:noreply, socket}
   end
 
-  # Catch-all — ignore unexpected messages rather than crashing the socket.
-  def handle_info(_message, socket), do: {:noreply, socket}
+  # Catch-all — log at :debug rather than crashing the socket so unexpected
+  # messages stay visible during development without producing noise in prod.
+  def handle_info(message, socket) do
+    Logger.debug(fn ->
+      "EntitiesSettings: unhandled handle_info — #{inspect(message)}"
+    end)
+
+    {:noreply, socket}
+  end
 
   # Private Functions
 

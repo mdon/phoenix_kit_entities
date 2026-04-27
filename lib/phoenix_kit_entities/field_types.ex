@@ -316,6 +316,37 @@ defmodule PhoenixKitEntities.FieldTypes do
   end
 
   @doc """
+  Translated short description for a field type.
+
+  Each clause is a literal `gettext(...)` call so `mix gettext.extract` picks
+  the strings up; calling `gettext(type.description)` over the raw map value
+  would feed a variable into the extractor and the descriptions would never
+  be translated.
+  """
+  @spec description_for(String.t()) :: String.t()
+  def description_for("text"), do: gettext("Single-line text input")
+  def description_for("textarea"), do: gettext("Multi-line text input")
+  def description_for("email"), do: gettext("Email address with validation")
+  def description_for("url"), do: gettext("Website URL with validation")
+  def description_for("rich_text"), do: gettext("WYSIWYG HTML editor")
+  def description_for("number"), do: gettext("Numeric input (integer or decimal)")
+  def description_for("boolean"), do: gettext("True/false toggle")
+  def description_for("date"), do: gettext("Date picker")
+  def description_for("select"), do: gettext("Dropdown selection (single choice)")
+  def description_for("radio"), do: gettext("Radio button group (single choice)")
+  def description_for("checkbox"), do: gettext("Checkbox group (multiple choices)")
+
+  def description_for("file"),
+    do: gettext("File upload field with configurable constraints")
+
+  def description_for(type_name) when is_binary(type_name) do
+    case Map.get(@field_types, type_name) do
+      nil -> ""
+      map -> Map.get(map, :description, "")
+    end
+  end
+
+  @doc """
   Checks if a field type requires options to be defined.
 
   ## Examples
@@ -370,7 +401,7 @@ defmodule PhoenixKitEntities.FieldTypes do
       %{
         value: type.name,
         label: type.label,
-        description: type.description,
+        description: description_for(type.name),
         category: Map.get(category_labels, type.category, "Other"),
         icon: type.icon,
         requires_options: type.requires_options
