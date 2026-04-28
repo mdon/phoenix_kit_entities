@@ -43,6 +43,8 @@ defmodule PhoenixKitEntities.FieldTypes do
       PhoenixKitEntities.FieldTypes.requires_options?("select") # => true
   """
 
+  use Gettext, backend: PhoenixKitWeb.Gettext
+
   alias PhoenixKitEntities.FieldType
 
   @type field_type :: String.t()
@@ -299,14 +301,49 @@ defmodule PhoenixKitEntities.FieldTypes do
       ]
   """
   def category_list do
+    # Each label uses a literal `gettext(...)` call so `mix gettext.extract`
+    # picks them up. A `gettext(label)` over a variable wouldn't be
+    # extracted (extractor only sees literals), and the labels would
+    # never be translated.
     [
-      {:basic, "Basic"},
-      {:numeric, "Numeric"},
-      {:boolean, "Boolean"},
-      {:datetime, "Date & Time"},
-      {:choice, "Choice"},
-      {:advanced, "Advanced"}
+      {:basic, gettext("Basic")},
+      {:numeric, gettext("Numeric")},
+      {:boolean, gettext("Boolean")},
+      {:datetime, gettext("Date & Time")},
+      {:choice, gettext("Choice")},
+      {:advanced, gettext("Advanced")}
     ]
+  end
+
+  @doc """
+  Translated short description for a field type.
+
+  Each clause is a literal `gettext(...)` call so `mix gettext.extract` picks
+  the strings up; calling `gettext(type.description)` over the raw map value
+  would feed a variable into the extractor and the descriptions would never
+  be translated.
+  """
+  @spec description_for(String.t()) :: String.t()
+  def description_for("text"), do: gettext("Single-line text input")
+  def description_for("textarea"), do: gettext("Multi-line text input")
+  def description_for("email"), do: gettext("Email address with validation")
+  def description_for("url"), do: gettext("Website URL with validation")
+  def description_for("rich_text"), do: gettext("WYSIWYG HTML editor")
+  def description_for("number"), do: gettext("Numeric input (integer or decimal)")
+  def description_for("boolean"), do: gettext("True/false toggle")
+  def description_for("date"), do: gettext("Date picker")
+  def description_for("select"), do: gettext("Dropdown selection (single choice)")
+  def description_for("radio"), do: gettext("Radio button group (single choice)")
+  def description_for("checkbox"), do: gettext("Checkbox group (multiple choices)")
+
+  def description_for("file"),
+    do: gettext("File upload field with configurable constraints")
+
+  def description_for(type_name) when is_binary(type_name) do
+    case Map.get(@field_types, type_name) do
+      nil -> ""
+      map -> Map.get(map, :description, "")
+    end
   end
 
   @doc """
@@ -364,7 +401,7 @@ defmodule PhoenixKitEntities.FieldTypes do
       %{
         value: type.name,
         label: type.label,
-        description: type.description,
+        description: description_for(type.name),
         category: Map.get(category_labels, type.category, "Other"),
         icon: type.icon,
         requires_options: type.requires_options
@@ -386,7 +423,10 @@ defmodule PhoenixKitEntities.FieldTypes do
 
       iex> invalid_field = %{"type" => "invalid", "key" => "test"}
       iex> PhoenixKitEntities.FieldTypes.validate_field(invalid_field)
-      {:error, "Invalid field type: invalid"}
+      {:error, {:invalid_field_type, "invalid"}}
+
+  Error tuples flow through `PhoenixKitEntities.Errors.message/1` for
+  user-facing strings.
   """
   def validate_field(field) when is_map(field) do
     with {:ok, field} <- validate_required_keys(field),
@@ -402,7 +442,7 @@ defmodule PhoenixKitEntities.FieldTypes do
     if Enum.empty?(missing) do
       {:ok, field}
     else
-      {:error, "Missing required keys: #{Enum.join(missing, ", ")}"}
+      {:error, {:missing_required_keys, missing}}
     end
   end
 
@@ -410,7 +450,7 @@ defmodule PhoenixKitEntities.FieldTypes do
     if valid_type?(field["type"]) do
       {:ok, field}
     else
-      {:error, "Invalid field type: #{field["type"]}"}
+      {:error, {:invalid_field_type, to_string(field["type"])}}
     end
   end
 
@@ -421,7 +461,7 @@ defmodule PhoenixKitEntities.FieldTypes do
       if is_list(options) && not Enum.empty?(options) do
         {:ok, field}
       else
-        {:error, "Field type '#{field["type"]}' requires options"}
+        {:error, {:requires_options, to_string(field["type"])}}
       end
     else
       {:ok, field}

@@ -7,6 +7,8 @@ defmodule PhoenixKitEntities.Web.DataForm do
   use PhoenixKitWeb, :live_view
   on_mount(PhoenixKitEntities.Web.Hooks)
 
+  require Logger
+
   import PhoenixKitWeb.Components.MultilangForm
 
   alias PhoenixKit.Settings
@@ -679,8 +681,15 @@ defmodule PhoenixKitEntities.Web.DataForm do
     end
   end
 
-  # Catch-all — ignore unexpected messages rather than crashing the socket.
-  def handle_info(_message, socket), do: {:noreply, socket}
+  # Catch-all — log at :debug rather than crashing the socket so unexpected
+  # messages stay visible during development without producing noise in prod.
+  def handle_info(message, socket) do
+    Logger.debug(fn ->
+      "DataForm: unhandled handle_info — #{inspect(message)}"
+    end)
+
+    {:noreply, socket}
+  end
 
   # Strip lang_title/lang_slug from params — these are translation input names
   # that shouldn't be passed to the changeset as DB fields.
@@ -859,7 +868,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
     db_title = Ecto.Changeset.get_field(changeset, :title) || ""
     status = Ecto.Changeset.get_field(changeset, :status) || "draft"
     data = Ecto.Changeset.get_field(changeset, :data) || %{}
-    created_by = Ecto.Changeset.get_field(changeset, :created_by)
+    created_by_uuid = Ecto.Changeset.get_field(changeset, :created_by_uuid)
 
     {slug, data} =
       compute_slug_and_data(socket, title, is_secondary, current_lang, changeset, data)
@@ -870,7 +879,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
       "slug" => slug,
       "status" => status,
       "data" => data,
-      "created_by" => created_by
+      "created_by_uuid" => created_by_uuid
     }
 
     changeset =
@@ -951,7 +960,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
         :status,
         :data,
         :metadata,
-        :created_by
+        :created_by_uuid
       ])
       |> Map.put(:action, :validate)
 
@@ -993,15 +1002,26 @@ defmodule PhoenixKitEntities.Web.DataForm do
     changeset
     |> Ecto.Changeset.apply_changes()
     |> Map.from_struct()
-    |> Map.take([:entity_uuid, :title, :slug, :status, :data, :metadata, :created_by])
+    |> Map.take([:entity_uuid, :title, :slug, :status, :data, :metadata, :created_by_uuid])
     |> Enum.into(%{}, fn {key, value} -> {to_string(key), value} end)
   end
 
   defp save_data_record(socket, data_params) do
+    opts = actor_opts(socket)
+
     if socket.assigns.data_record.uuid do
-      EntityData.update(socket.assigns.data_record, data_params)
+      EntityData.update(socket.assigns.data_record, data_params, opts)
     else
-      EntityData.create(data_params)
+      EntityData.create(data_params, opts)
+    end
+  end
+
+  # Threads the current user UUID through to context functions that
+  # accept `actor_uuid:` opts.
+  defp actor_opts(socket) do
+    case socket.assigns[:phoenix_kit_current_scope] do
+      %{user: %{uuid: uuid}} -> [actor_uuid: uuid]
+      _ -> []
     end
   end
 

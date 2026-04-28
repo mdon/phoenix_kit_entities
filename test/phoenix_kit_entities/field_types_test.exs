@@ -230,7 +230,7 @@ defmodule PhoenixKitEntities.FieldTypesTest do
       result = FieldTypes.for_picker()
 
       assert is_list(result)
-      assert result != []
+      refute Enum.empty?(result)
 
       Enum.each(result, fn item ->
         assert Map.has_key?(item, :value)
@@ -238,6 +238,49 @@ defmodule PhoenixKitEntities.FieldTypesTest do
         assert Map.has_key?(item, :category)
         assert Map.has_key?(item, :icon)
       end)
+    end
+
+    test "description on each row is the gettext-translated version, not the raw map value" do
+      # for_picker/0 routes through description_for/1 so the description is
+      # extractable. If a future change reverts to `type.description`, this
+      # test breaks.
+      [text_row | _] = Enum.filter(FieldTypes.for_picker(), &(&1.value == "text"))
+      assert text_row.description == FieldTypes.description_for("text")
+    end
+  end
+
+  # --- description_for/1 ---
+
+  describe "description_for/1" do
+    test "returns translated string for every known field type" do
+      for type_name <- FieldTypes.list_types() do
+        result = FieldTypes.description_for(type_name)
+        assert is_binary(result)
+        refute result == ""
+      end
+    end
+
+    test "returns specific gettext-translated strings (extractable)" do
+      # Each clause is a literal `gettext(...)` call so `mix gettext.extract`
+      # picks it up. Pin the EXACT string per type to catch any drift.
+      assert FieldTypes.description_for("text") == "Single-line text input"
+      assert FieldTypes.description_for("textarea") == "Multi-line text input"
+      assert FieldTypes.description_for("email") == "Email address with validation"
+      assert FieldTypes.description_for("url") == "Website URL with validation"
+      assert FieldTypes.description_for("rich_text") == "WYSIWYG HTML editor"
+      assert FieldTypes.description_for("number") == "Numeric input (integer or decimal)"
+      assert FieldTypes.description_for("boolean") == "True/false toggle"
+      assert FieldTypes.description_for("date") == "Date picker"
+      assert FieldTypes.description_for("select") == "Dropdown selection (single choice)"
+      assert FieldTypes.description_for("radio") == "Radio button group (single choice)"
+      assert FieldTypes.description_for("checkbox") == "Checkbox group (multiple choices)"
+
+      assert FieldTypes.description_for("file") ==
+               "File upload field with configurable constraints"
+    end
+
+    test "returns empty string for unknown type" do
+      assert FieldTypes.description_for("nonexistent") == ""
     end
   end
 
@@ -261,26 +304,35 @@ defmodule PhoenixKitEntities.FieldTypesTest do
     end
 
     test "rejects missing required keys" do
-      assert {:error, msg} = FieldTypes.validate_field(%{"type" => "text"})
-      assert msg =~ "Missing required keys"
+      assert {:error, {:missing_required_keys, missing}} =
+               FieldTypes.validate_field(%{"type" => "text"})
+
+      assert "key" in missing
+      assert "label" in missing
+
+      assert PhoenixKitEntities.Errors.message({:missing_required_keys, missing}) =~
+               "Missing required keys: "
     end
 
     test "rejects invalid field type" do
       field = %{"type" => "invalid", "key" => "test", "label" => "Test"}
-      assert {:error, msg} = FieldTypes.validate_field(field)
-      assert msg =~ "Invalid field type"
+      assert {:error, {:invalid_field_type, "invalid"}} = FieldTypes.validate_field(field)
+
+      assert PhoenixKitEntities.Errors.message({:invalid_field_type, "invalid"}) ==
+               "Invalid field type: invalid"
     end
 
     test "rejects select field without options" do
       field = %{"type" => "select", "key" => "cat", "label" => "Category"}
-      assert {:error, msg} = FieldTypes.validate_field(field)
-      assert msg =~ "requires options"
+      assert {:error, {:requires_options, "select"}} = FieldTypes.validate_field(field)
+
+      assert PhoenixKitEntities.Errors.message({:requires_options, "select"}) ==
+               "Field type 'select' requires options"
     end
 
     test "rejects select field with empty options" do
       field = %{"type" => "select", "key" => "cat", "label" => "Category", "options" => []}
-      assert {:error, msg} = FieldTypes.validate_field(field)
-      assert msg =~ "requires options"
+      assert {:error, {:requires_options, "select"}} = FieldTypes.validate_field(field)
     end
   end
 

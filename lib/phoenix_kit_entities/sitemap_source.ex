@@ -93,9 +93,11 @@ defmodule PhoenixKitEntities.SitemapSource do
   alias PhoenixKitEntities.UrlResolver
 
   @impl true
+  @spec source_name() :: :entities
   def source_name, do: :entities
 
   @impl true
+  @spec sitemap_filename() :: String.t()
   def sitemap_filename, do: "sitemap-entities"
 
   @doc """
@@ -103,6 +105,7 @@ defmodule PhoenixKitEntities.SitemapSource do
   Each entity type gets its own sitemap file.
   """
   @impl true
+  @spec sub_sitemaps(keyword()) :: [{String.t(), [PhoenixKit.Modules.Sitemap.UrlEntry.t()]}] | nil
   def sub_sitemaps(opts) do
     is_default = Keyword.get(opts, :is_default_language, true)
 
@@ -139,6 +142,7 @@ defmodule PhoenixKitEntities.SitemapSource do
   end
 
   @impl true
+  @spec enabled?() :: boolean()
   def enabled? do
     PhoenixKitEntities.enabled?()
   rescue
@@ -146,6 +150,7 @@ defmodule PhoenixKitEntities.SitemapSource do
   end
 
   @impl true
+  @spec collect(keyword()) :: [PhoenixKit.Modules.Sitemap.UrlEntry.t()]
   def collect(opts \\ []) do
     is_default = Keyword.get(opts, :is_default_language, true)
 
@@ -300,7 +305,7 @@ defmodule PhoenixKitEntities.SitemapSource do
         lastmod: entity.date_updated || entity.date_created,
         changefreq: "daily",
         priority: 0.7,
-        title: "#{entity.display_name || String.capitalize(entity.name)} - Index",
+        title: "#{entity.display_name || entity.display_name_plural || entity.name} - Index",
         category: entity.display_name || entity.name,
         source: :entities,
         canonical_path: canonical_path

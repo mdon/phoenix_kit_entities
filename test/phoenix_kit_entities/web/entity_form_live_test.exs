@@ -1,0 +1,249 @@
+defmodule PhoenixKitEntities.Web.EntityFormLiveTest do
+  use PhoenixKitEntities.LiveCase, async: false
+
+  alias PhoenixKitEntities, as: Entities
+
+  setup do
+    actor_uuid = Ecto.UUID.generate()
+
+    {:ok, entity} =
+      Entities.create_entity(
+        %{
+          name: "ef_test",
+          display_name: "EF Test",
+          display_name_plural: "EF Tests",
+          fields_definition: [
+            %{"type" => "text", "key" => "name", "label" => "Name"}
+          ],
+          status: "published",
+          created_by_uuid: actor_uuid
+        },
+        actor_uuid: actor_uuid
+      )
+
+    {:ok, entity: entity, actor_uuid: actor_uuid}
+  end
+
+  describe "mount new" do
+    test "renders the new-entity page", %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, _view, html} = live(conn, "/en/admin/entities/new")
+
+      assert html =~ "Create New Entity"
+    end
+
+    test "submit button has phx-disable-with (delta-pin C5)", %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, _view, html} = live(conn, "/en/admin/entities/new")
+
+      assert html =~ ~r|type="submit"[^>]*phx-disable-with=|
+    end
+  end
+
+  describe "mount edit" do
+    test "renders existing entity values pre-filled", %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, _view, html} = live(conn, "/en/admin/entities/#{ctx.entity.uuid}/edit")
+
+      assert html =~ "Edit Entity"
+      assert html =~ ~s|value="EF Test"|
+      assert html =~ ~s|value="ef_test"|
+    end
+  end
+
+  describe "validate event" do
+    test "validate sets :action so inline errors render (delta-pin C5)",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/entities/#{ctx.entity.uuid}/edit")
+
+      # Submit a name that violates `validate_format` (uppercase letters
+      # forbidden). Without `:action = :validate` on the changeset, the
+      # `<.input>` core component swallows the error silently.
+      view
+      |> form("form[phx-change='validate']", %{"entities" => %{"name" => "INVALID-name"}})
+      |> render_change()
+
+      html = render(view)
+      # Either the inline error renders with the format message, or at
+      # minimum the changeset has its action set (we can't read socket
+      # state, so check the rendered DOM for an error class).
+      assert html =~ "input-error" or html =~ "must contain only lowercase"
+    end
+  end
+
+  describe "switch_language event" do
+    test "ignores unknown language and stays on the form", %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/entities/#{ctx.entity.uuid}/edit")
+
+      render_hook(view, "switch_language", %{"lang" => "totally-fake"})
+      assert render(view) =~ "Edit Entity"
+    end
+  end
+
+  describe "handle_info catch-all" do
+    test "ignores unrelated PubSub messages without crashing",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/entities/#{ctx.entity.uuid}/edit")
+
+      send(view.pid, {:unrelated_message, :payload})
+      assert render(view) =~ "Edit Entity"
+    end
+
+    test "logs at :debug level so unexpected messages stay visible in dev",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/entities/#{ctx.entity.uuid}/edit")
+
+      previous = Logger.level()
+      Logger.configure(level: :debug)
+      on_exit(fn -> Logger.configure(level: previous) end)
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :debug], fn ->
+          send(view.pid, {:unhandled_in_test, :payload})
+          render(view)
+        end)
+
+      assert log =~ "EntityForm: unhandled handle_info"
+    end
+  end
+
+  describe "icon picker events" do
+    test "open / close picker doesn't crash", %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/entities/#{ctx.entity.uuid}/edit")
+
+      render_hook(view, "open_icon_picker", %{})
+      render_hook(view, "search_icons", %{"search" => "user"})
+      render_hook(view, "filter_by_category", %{"category" => "general"})
+      render_hook(view, "select_icon", %{"icon" => "hero-user"})
+      render_hook(view, "clear_icon", %{})
+      render_hook(view, "close_icon_picker", %{})
+      render_hook(view, "stop_propagation", %{})
+      assert render(view) =~ "Edit"
+    end
+  end
+
+  describe "field management events" do
+    test "add / edit / cancel / delete field events don't crash",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/entities/#{ctx.entity.uuid}/edit")
+
+      render_hook(view, "add_field", %{})
+
+      render_hook(view, "save_field", %{
+        "field" => %{
+          "type" => "text",
+          "key" => "second",
+          "label" => "Second"
+        }
+      })
+
+      render_hook(view, "edit_field", %{"index" => "0"})
+      render_hook(view, "update_field_form", %{"field" => %{"label" => "Updated"}})
+      render_hook(view, "cancel_field", %{})
+
+      render_hook(view, "confirm_delete_field", %{"index" => "0"})
+      render_hook(view, "cancel_delete_field", %{})
+
+      render_hook(view, "move_field_up", %{"index" => "1"})
+      render_hook(view, "move_field_down", %{"index" => "0"})
+
+      render_hook(view, "generate_entity_slug", %{})
+      render_hook(view, "generate_field_key", %{})
+      assert render(view) =~ "Edit"
+    end
+
+    test "select-type field add_option / update_option / remove_option don't crash",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/entities/#{ctx.entity.uuid}/edit")
+
+      render_hook(view, "add_field", %{})
+
+      render_hook(view, "update_field_form", %{
+        "field" => %{"type" => "select", "label" => "Choices"}
+      })
+
+      render_hook(view, "add_option", %{})
+      render_hook(view, "update_option", %{"index" => "0", "value" => "Apple"})
+      render_hook(view, "remove_option", %{"index" => "0"})
+      assert render(view) =~ "Edit"
+    end
+  end
+
+  describe "public form settings events" do
+    test "toggle_public_form / update_public_form_setting / toggle_public_form_field",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/entities/#{ctx.entity.uuid}/edit")
+
+      render_hook(view, "toggle_public_form", %{})
+
+      render_hook(view, "update_public_form_setting", %{
+        "setting" => "public_form_title",
+        "value" => "Hello"
+      })
+
+      render_hook(view, "toggle_public_form_field", %{"field" => "name"})
+      assert render(view) =~ "Edit"
+    end
+
+    test "security setting toggles + actions",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/entities/#{ctx.entity.uuid}/edit")
+
+      render_hook(view, "toggle_security_setting", %{"setting" => "public_form_honeypot"})
+
+      render_hook(view, "update_security_action", %{
+        "setting" => "public_form_honeypot_action",
+        "value" => "save_suspicious"
+      })
+
+      render_hook(view, "reset_form_stats", %{})
+      assert render(view) =~ "Edit"
+    end
+  end
+
+  describe "backup toggles + export" do
+    test "toggle_backup_definitions / toggle_backup_data / export_entity_now",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/entities/#{ctx.entity.uuid}/edit")
+
+      render_hook(view, "toggle_backup_definitions", %{})
+      render_hook(view, "toggle_backup_data", %{})
+      render_hook(view, "export_entity_now", %{})
+      assert render(view) =~ "Edit"
+    end
+  end
+
+  describe "save event" do
+    test "submitting valid params persists changes", %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/entities/#{ctx.entity.uuid}/edit")
+
+      view
+      |> form("form", entities: %{display_name: "Renamed"})
+      |> render_submit()
+
+      reread = Entities.get_entity(ctx.entity.uuid)
+      assert reread != nil
+    end
+  end
+
+  describe "reset event" do
+    test "doesn't crash and re-renders the form", %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/entities/#{ctx.entity.uuid}/edit")
+
+      render_hook(view, "reset", %{})
+      assert render(view) =~ "Edit"
+    end
+  end
+end

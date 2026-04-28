@@ -41,8 +41,7 @@ lib/modules/entities/
     ├── entities.ex / .html.heex         # Entity dashboard
     ├── entity_form.ex / .html.heex      # Create/update entity definitions + public form config
     ├── data_navigator.ex / .html.heex   # Browse/filter records per entity
-    ├── data_form.ex / .html.heex        # Create/update individual records
-    ├── data_view.ex                     # Read-only view component
+    ├── data_form.ex / .html.heex        # Create/update individual records (handles new/show/edit)
     ├── entities_settings.ex / .html.heex# System configuration
     └── hooks.ex                         # LiveView hooks for entity pages
 
@@ -318,7 +317,7 @@ PhoenixKitEntities.get_system_stats()
 ### Enforcing limits
 ```elixir
 PhoenixKitEntities.validate_user_entity_limit(admin.uuid)
-# {:ok, :valid} or {:error, "You have reached the maximum limit of 100 entities"}
+# {:ok, :valid} or {:error, {:user_entity_limit_reached, 100}}
 ```
 
 ### Language-aware queries

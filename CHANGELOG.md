@@ -10,7 +10,7 @@
 - Unit tests for `UrlResolver`, `public_path/3` / `public_url/3`, multilang field resolution, and per-locale sidebar cache invalidation
 
 ### Changed
-- Admin LiveViews (`Web.Entities`, `Web.DataNavigator`, `Web.DataForm`, `Web.DataView`) now thread the current locale through entity lookups so translated `display_name` / `display_name_plural` / `description` render in the admin UI
+- Admin LiveViews (`Web.Entities`, `Web.DataNavigator`, `Web.DataForm`) now thread the current locale through entity lookups so translated `display_name` / `display_name_plural` / `description` render in the admin UI
 - Sidebar `entities_children` caches per-locale ETS entries; `invalidate_entities_cache/0` now match-deletes every locale variant instead of the single atom key
 - `SitemapSource` delegates URL construction to `UrlResolver` while keeping its "prefix every language" policy
 - `resolve_language/2` and `resolve_languages/2` are nil-safe so callers can pass an optional locale without a pre-check
@@ -44,7 +44,7 @@
 - Add `PhoenixKitEntities.FormBuilder` for dynamic form generation and validation
 - Add `PhoenixKitEntities.Events` PubSub helpers for entity/data lifecycle events
 - Add `PhoenixKitEntities.Presence` and `PresenceHelpers` for collaborative editing with FIFO locking
-- Add admin LiveViews: Entities, EntityForm, DataNavigator, DataForm, DataView, EntitiesSettings
+- Add admin LiveViews: Entities, EntityForm, DataNavigator, DataForm, EntitiesSettings
 - Add route module with `admin_routes/0`, `admin_locale_routes/0`, and public form routes
 - Add `css_sources/0` for Tailwind CSS scanning support
 - Add migration module (v1) with `IF NOT EXISTS` for both tables (run by parent app)

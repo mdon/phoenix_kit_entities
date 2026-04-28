@@ -91,7 +91,7 @@ defmodule PhoenixKitEntitiesTest do
     test "returns a list of Tab structs" do
       tabs = PhoenixKitEntities.settings_tabs()
       assert is_list(tabs)
-      assert tabs != []
+      refute Enum.empty?(tabs)
     end
   end
 

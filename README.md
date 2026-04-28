@@ -147,8 +147,7 @@ lib/
       entities.ex                      # Entity list LiveView (inline template)
       entity_form.ex                   # Entity definition builder LiveView
       data_navigator.ex                # Data record browser LiveView
-      data_form.ex                     # Data record form LiveView
-      data_view.ex                     # Data record read-only view
+      data_form.ex                     # Data record form LiveView (handles new/show/edit)
       entities_settings.ex             # Module settings LiveView
       hooks.ex                         # Shared LiveView hooks
 ```
@@ -529,4 +528,4 @@ Names must be snake_case, start with a letter, 2-50 characters. Examples: `produ
 
 Force a clean rebuild: `mix deps.clean phoenix_kit_entities && mix deps.get && mix deps.compile phoenix_kit_entities --force && mix compile --force`
 
-> **Note:** This repo has no database migrations. All tables and migrations are managed by the parent PhoenixKit project. The test helper creates necessary DB functions directly when a test database is available.
+> **Note:** Most production deploys see the entity tables created by core PhoenixKit's versioned migration `V17`. The local `PhoenixKitEntities.Migrations.V1` module provides an idempotent (`IF NOT EXISTS`) migration that's the source of truth for the test schema and for standalone host apps that don't use core's installer. The test helper creates the `uuid_generate_v7()` Postgres function directly when a test database is available.
