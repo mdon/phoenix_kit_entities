@@ -314,6 +314,107 @@ the mid-tier modules:
 - **UrlResolver branches that depend on Languages being enabled
   (multilang mode)** — single-language mode is what tests run under.
 
+## Fixed (DataView removal — 2026-04-28)
+
+After the surfaced-for-boss item above was reviewed, Max confirmed the
+module was deliberately kept "for possible future external component
+use" — but with the caveat that the future shape (auth-bypass, public
+layout, possibly different styling) won't resemble this admin LV
+anyway. Decision: remove now, recover from `git history` if/when the
+public-display feature actually materialises.
+
+- ~~**`lib/phoenix_kit_entities/web/data_view.ex` deleted**~~
+  (`f7e86c0`). Verified zero callers via plain grep + `ast-grep`
+  across `phoenix_kit_entities`, `phoenix_kit` core, and
+  `phoenix_kit_parent` (lib + config + heex paths only — JS files
+  excluded since `DataView` is also a browser API name). No `alias`,
+  `import`, struct reference, or `live(...)` route mounted it.
+- Doc references scrubbed in `CHANGELOG.md` (×2), `README.md` (file
+  layout), `lib/phoenix_kit_entities/OVERVIEW.md`,
+  `lib/phoenix_kit_entities/DEEP_DIVE.md`. Historical
+  `dev_docs/pull_requests/.../*_REVIEW.md` artifacts left untouched
+  per the read-only-reviewer-artifacts rule.
+- 645 tests still passing post-removal (module had zero tests).
+
+## Fixed (Batch 5 — coverage push round 2 — 2026-04-28)
+
+Push `mix test --cover` from 67.33% → **75.14%** (+7.81pp) by closing
+the next-tier residuals after Batch 4. Same no-deps constraint
+(`mix test --cover` only). +39 tests (645 → 684), 5/5 stable.
+
+### Mix tasks now covered (was 0%)
+
+`Mix.Task.run("app.start")` is a no-op when the app is already started
+(test env), so the task bodies run cleanly inside the sandbox once
+`Mix.shell()` is swapped to `Mix.Shell.Process` for capture. I
+dismissed this prematurely in Batch 4.
+
+- `mix_tasks/export_test.exs` (9 tests) — every option branch:
+  no flags, `--quiet`, `--with-data` / `--no-data`, `--output`,
+  `--entity NAME` (happy + unknown-name exit), short aliases.
+- `mix_tasks/import_test.exs` (13 tests) — default-flow with
+  `{:mix_shell_input, :yes?, false}` cancellation, `-y` auto-confirm,
+  every `--on-conflict` value (skip / overwrite / merge / bogus →
+  error+exit), `--dry-run`, `--quiet --dry-run`, `--entity` (happy +
+  unknown), `--input`, short aliases, empty-source-dir branch.
+
+### UrlResolver multilang branches now covered
+
+`url_resolver_multilang_test.exs` (11 tests) enables the Languages
+module via `languages_enabled` setting + a 3-language
+`languages_config` JSON. Critical detail: write the config via
+`Settings.update_json_setting/2` (the JSONB `value_json` column), not
+`update_setting/2` (255-char `value` column truncates and breaks).
+Tests cover: primary lang (no prefix), primary dialect (en-US → no
+prefix because base matches), secondary base + dialect both prepend
+`/<base>`, malformed locale rejection (regex `^[a-z]{2,3}$` allowlist),
+nil/empty fall-through.
+
+### DataNavigator push_patch handlers now covered
+
+`Test.Router` gained a second scope under the production
+`/phoenix_kit/...` prefix so the LV's `Routes.path/2`-driven
+`push_patch` URLs resolve. 4 new tests in `data_navigator_live_test.exs`
+covering toggle_view_mode (grid + table), filter_by_status, search +
+clear_filters, and filter_by_entity with empty uuid (the redirect
+branch that previously crashed with "cannot invoke handle_params nor
+navigate/patch to /phoenix_kit/...").
+
+### ActivityLog rescue branches
+
+`activity_log_rescue_test.exs` gained 2 tests: sandbox-crossing path
+(asserts no `Logger.warning` is emitted; upstream's own rescue catches
+the `OwnershipError` first), and unexpected-shape path (passes
+`%DateTime{}` — `is_map/1` accepts it but downstream rejects with
+`Ecto.CastError`; the wrapper still returns `:ok` per contract).
+
+### Per-module coverage uplift (Batch 5 over Batch 4)
+
+| Module | Batch 4 | Batch 5 |
+|--------|---------|---------|
+| Mix.Tasks.Export | 0% | ~85% |
+| Mix.Tasks.Import | 0% | ~85% |
+| UrlResolver | 64.71% | ~85% |
+| ActivityLog | 53.85% | ~80% |
+| Web.DataNavigator | 57.01% | ~80% |
+| **Total** | **67.33%** | **75.14%** |
+
+### What's still uncovered (genuine residual now)
+
+- `Migrations.V1` — runs at test_helper boot before `:cover` starts.
+- `ActivityLog :exit` catch — only fires on sandbox-shutdown signals
+  during teardown, not deterministically triggerable.
+- `UrlResolver primary_language_base?` DB-outage rescues — upstream
+  catches before our rescue point.
+- DataForm / EntityForm / EntitiesSettings handlers that
+  `push_patch`/`push_navigate` to URLs outside the `/phoenix_kit/...`
+  test scope (settings paths, form patches with query strings the
+  test router doesn't mirror).
+
+These are caps; pushing past them needs Mox / Bypass / Oban Pro or
+mirroring every production route in `Test.Router`. Both are beyond
+the no-deps constraint.
+
 ## Open
 
 None.
