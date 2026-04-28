@@ -47,9 +47,10 @@ defmodule PhoenixKitEntities.Mirror.ImporterTest do
         "description" => Keyword.get(opts, :description, "From import"),
         "icon" => Keyword.get(opts, :icon, "hero-puzzle-piece"),
         "status" => Keyword.get(opts, :status, "published"),
-        "fields_definition" => Keyword.get(opts, :fields_definition, [
-          %{"type" => "text", "key" => "title", "label" => "Title"}
-        ]),
+        "fields_definition" =>
+          Keyword.get(opts, :fields_definition, [
+            %{"type" => "text", "key" => "title", "label" => "Title"}
+          ]),
         "settings" => Keyword.get(opts, :settings, %{})
       },
       "data" =>
@@ -68,6 +69,7 @@ defmodule PhoenixKitEntities.Mirror.ImporterTest do
   describe "import_from_data/2 — invalid format" do
     test "returns :invalid_format when shape isn't {definition, data}" do
       assert {:error, :invalid_format} = Importer.import_from_data(%{}, :skip)
+
       assert {:error, :invalid_format} =
                Importer.import_from_data(%{"definition" => 1, "data" => "x"}, :skip)
     end
@@ -280,6 +282,7 @@ defmodule PhoenixKitEntities.Mirror.ImporterTest do
       case Storage.write_entity(name, payload) do
         {:ok, _} ->
           selections = %{name => %{definition: :skip, data: %{}}}
+
           assert {:ok, %{definitions: [{:ok, :skipped, _}]}} =
                    Importer.import_selected(selections)
 

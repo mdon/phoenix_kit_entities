@@ -20,6 +20,7 @@ defmodule Mix.Tasks.PhoenixKitEntities.ImportTest do
 
     previous_shell = Mix.shell()
     Mix.shell(Mix.Shell.Process)
+
     on_exit(fn ->
       Mix.shell(previous_shell)
       File.rm_rf!(@tmp_root)
