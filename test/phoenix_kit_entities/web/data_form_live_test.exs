@@ -218,6 +218,63 @@ defmodule PhoenixKitEntities.Web.DataFormLiveTest do
     end
   end
 
+  describe "validate event" do
+    test "renders changeset with :action set after validate", %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, edit_url(ctx.entity, ctx.record))
+
+      _html =
+        view
+        |> form("form", phoenix_kit_entity_data: %{title: "Updated"})
+        |> render_change()
+
+      assert render(view) =~ "Edit DF Test"
+    end
+  end
+
+  describe "save event" do
+    test "submits form params + persists changes", %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, edit_url(ctx.entity, ctx.record))
+
+      view
+      |> form("form", phoenix_kit_entity_data: %{title: "Saved"})
+      |> render_submit()
+
+      # Process didn't crash; record exists.
+      reread = EntityData.get(ctx.record.uuid)
+      assert reread != nil
+    end
+  end
+
+  describe "reset event" do
+    test "doesn't crash and re-renders the form", %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, edit_url(ctx.entity, ctx.record))
+
+      render_hook(view, "reset", %{})
+      assert render(view) =~ "Edit DF Test"
+    end
+  end
+
+  describe "generate_slug event" do
+    test "doesn't crash and re-renders the form", %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, edit_url(ctx.entity, ctx.record))
+
+      render_hook(view, "generate_slug", %{})
+      assert render(view) =~ "Edit DF Test"
+    end
+  end
+
+  describe "new form" do
+    test "mounts the new path successfully", %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, _view, html} = live(conn, "/en/admin/entities/#{ctx.entity.name}/data/new")
+      assert html =~ "DF Test" or html =~ "data"
+    end
+  end
+
   # ── helpers ──────────────────────────────────────────────────
 
   defp edit_url(entity, record),

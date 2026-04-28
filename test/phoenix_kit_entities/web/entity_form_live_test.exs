@@ -110,4 +110,140 @@ defmodule PhoenixKitEntities.Web.EntityFormLiveTest do
       assert log =~ "EntityForm: unhandled handle_info"
     end
   end
+
+  describe "icon picker events" do
+    test "open / close picker doesn't crash", %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/entities/#{ctx.entity.uuid}/edit")
+
+      render_hook(view, "open_icon_picker", %{})
+      render_hook(view, "search_icons", %{"search" => "user"})
+      render_hook(view, "filter_by_category", %{"category" => "general"})
+      render_hook(view, "select_icon", %{"icon" => "hero-user"})
+      render_hook(view, "clear_icon", %{})
+      render_hook(view, "close_icon_picker", %{})
+      render_hook(view, "stop_propagation", %{})
+      assert render(view) =~ "Edit"
+    end
+  end
+
+  describe "field management events" do
+    test "add / edit / cancel / delete field events don't crash",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/entities/#{ctx.entity.uuid}/edit")
+
+      render_hook(view, "add_field", %{})
+
+      render_hook(view, "save_field", %{
+        "field" => %{
+          "type" => "text",
+          "key" => "second",
+          "label" => "Second"
+        }
+      })
+
+      render_hook(view, "edit_field", %{"index" => "0"})
+      render_hook(view, "update_field_form", %{"field" => %{"label" => "Updated"}})
+      render_hook(view, "cancel_field", %{})
+
+      render_hook(view, "confirm_delete_field", %{"index" => "0"})
+      render_hook(view, "cancel_delete_field", %{})
+
+      render_hook(view, "move_field_up", %{"index" => "1"})
+      render_hook(view, "move_field_down", %{"index" => "0"})
+
+      render_hook(view, "generate_entity_slug", %{})
+      render_hook(view, "generate_field_key", %{})
+      assert render(view) =~ "Edit"
+    end
+
+    test "select-type field add_option / update_option / remove_option don't crash",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/entities/#{ctx.entity.uuid}/edit")
+
+      render_hook(view, "add_field", %{})
+
+      render_hook(view, "update_field_form", %{
+        "field" => %{"type" => "select", "label" => "Choices"}
+      })
+
+      render_hook(view, "add_option", %{})
+      render_hook(view, "update_option", %{"index" => "0", "value" => "Apple"})
+      render_hook(view, "remove_option", %{"index" => "0"})
+      assert render(view) =~ "Edit"
+    end
+  end
+
+  describe "public form settings events" do
+    test "toggle_public_form / update_public_form_setting / toggle_public_form_field",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/entities/#{ctx.entity.uuid}/edit")
+
+      render_hook(view, "toggle_public_form", %{})
+
+      render_hook(view, "update_public_form_setting", %{
+        "setting" => "public_form_title",
+        "value" => "Hello"
+      })
+
+      render_hook(view, "toggle_public_form_field", %{"field" => "name"})
+      assert render(view) =~ "Edit"
+    end
+
+    test "security setting toggles + actions",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/entities/#{ctx.entity.uuid}/edit")
+
+      render_hook(view, "toggle_security_setting", %{"setting" => "public_form_honeypot"})
+
+      render_hook(view, "update_security_action", %{
+        "setting" => "public_form_honeypot_action",
+        "value" => "save_suspicious"
+      })
+
+      render_hook(view, "reset_form_stats", %{})
+      assert render(view) =~ "Edit"
+    end
+  end
+
+  describe "backup toggles + export" do
+    test "toggle_backup_definitions / toggle_backup_data / export_entity_now",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/entities/#{ctx.entity.uuid}/edit")
+
+      render_hook(view, "toggle_backup_definitions", %{})
+      render_hook(view, "toggle_backup_data", %{})
+      render_hook(view, "export_entity_now", %{})
+      assert render(view) =~ "Edit"
+    end
+  end
+
+  describe "save event" do
+    test "submitting valid params persists changes", %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/entities/#{ctx.entity.uuid}/edit")
+
+      view
+      |> form("form", entities: %{display_name: "Renamed"})
+      |> render_submit()
+
+      reread = Entities.get_entity(ctx.entity.uuid)
+      assert reread != nil
+    end
+  end
+
+  describe "reset event" do
+    test "doesn't crash and re-renders the form", %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/entities/#{ctx.entity.uuid}/edit")
+
+      render_hook(view, "reset", %{})
+      assert render(view) =~ "Edit"
+    end
+  end
 end

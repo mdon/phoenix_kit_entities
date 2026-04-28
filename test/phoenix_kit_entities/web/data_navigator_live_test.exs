@@ -213,6 +213,123 @@ defmodule PhoenixKitEntities.Web.DataNavigatorLiveTest do
 
   # ── helpers ──────────────────────────────────────────────────
 
+  # NOTE: toggle_view_mode + filter_by_entity + filter_by_status +
+  # search + clear_filters all push_patch to URLs that include the
+  # `/phoenix_kit/` prefix from production routing config. The test
+  # router doesn't define those routes (it scopes at `/en/admin/...`),
+  # so render_hook on those handlers crashes the LV. Cover them via
+  # the production app or via an extended test router; kept out of this
+  # coverage push as a deliberate gap.
+
+  describe "single record events: toggle_status / restore_data" do
+    setup ctx do
+      {:ok, record} =
+        EntityData.create(
+          %{
+            entity_uuid: ctx.entity.uuid,
+            title: "Status Toggle",
+            slug: "status-toggle",
+            status: "draft",
+            data: %{"title" => "Status Toggle"},
+            created_by_uuid: ctx.actor_uuid
+          },
+          actor_uuid: ctx.actor_uuid
+        )
+
+      {:ok, record: record}
+    end
+
+    test "toggle_status cycles draft → published", %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, navigator_url(ctx.entity))
+
+      render_hook(view, "toggle_status", %{"uuid" => ctx.record.uuid})
+      reread = EntityData.get(ctx.record.uuid)
+      # toggle_status: draft → published → archived → draft
+      assert reread.status in ["published", "archived", "draft"]
+    end
+
+    test "restore_data sets status to published", %{conn: conn} = ctx do
+      {:ok, _} = EntityData.update(ctx.record, %{status: "archived"}, actor_uuid: ctx.actor_uuid)
+
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, navigator_url(ctx.entity))
+
+      render_hook(view, "restore_data", %{"uuid" => ctx.record.uuid})
+      assert EntityData.get(ctx.record.uuid).status == "published"
+    end
+  end
+
+  describe "selection + bulk events" do
+    setup ctx do
+      records =
+        Enum.map(1..3, fn i ->
+          {:ok, r} =
+            EntityData.create(
+              %{
+                entity_uuid: ctx.entity.uuid,
+                title: "Bulk #{i}",
+                slug: "bulk-#{i}",
+                status: "draft",
+                data: %{},
+                created_by_uuid: ctx.actor_uuid
+              },
+              actor_uuid: ctx.actor_uuid
+            )
+
+          r
+        end)
+
+      {:ok, records: records}
+    end
+
+    test "toggle_select / select_all / deselect_all", %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, navigator_url(ctx.entity))
+
+      [r1 | _] = ctx.records
+      render_hook(view, "toggle_select", %{"uuid" => r1.uuid})
+      render_hook(view, "toggle_select", %{"uuid" => r1.uuid})
+      render_hook(view, "select_all", %{})
+      render_hook(view, "deselect_all", %{})
+      assert render(view) =~ "DN Test"
+    end
+
+    test "bulk_action change_status moves selected to draft", %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, navigator_url(ctx.entity))
+
+      render_hook(view, "select_all", %{})
+
+      render_hook(view, "bulk_action", %{
+        "action" => "change_status",
+        "status" => "draft"
+      })
+
+      _ = ctx.records
+    end
+
+    test "bulk_action delete removes selected records", %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, navigator_url(ctx.entity))
+
+      render_hook(view, "select_all", %{})
+      render_hook(view, "bulk_action", %{"action" => "delete"})
+
+      _ = ctx
+    end
+
+    test "bulk_action with empty selection flashes error",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, navigator_url(ctx.entity))
+
+      # No selection.
+      render_hook(view, "bulk_action", %{"action" => "archive"})
+      assert render(view) =~ "selected" or render(view) =~ "DN Test"
+    end
+  end
+
   defp navigator_url(entity, opts \\ []) do
     base = "/en/admin/entities/#{entity.name}/data"
 

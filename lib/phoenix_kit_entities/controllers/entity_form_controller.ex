@@ -240,7 +240,7 @@ defmodule PhoenixKitEntities.Controllers.EntityFormController do
   defp check_rate_limit(conn, settings, entity) do
     if Map.get(settings, "public_form_rate_limit", false) do
       ip = get_rate_limit_ip(conn)
-      key = "entity_form:#{entity.id}:#{ip}"
+      key = "entity_form:#{entity.uuid}:#{ip}"
 
       # Use the same Backend module used by RateLimiter
       case RateLimiter.Backend.hit(key, @rate_limit_window_ms, @rate_limit_max) do
@@ -274,7 +274,7 @@ defmodule PhoenixKitEntities.Controllers.EntityFormController do
     {metadata, "published"}
   end
 
-  defp apply_security_flags(metadata, security_flags, logger) do
+  defp apply_security_flags(metadata, security_flags, _logger) do
     # Build list of security warnings
     warnings =
       Enum.map(security_flags, fn {:triggered, type, action} ->
@@ -293,10 +293,13 @@ defmodule PhoenixKitEntities.Controllers.EntityFormController do
         action == "save_log"
       end)
 
-    # Log warnings if needed
+    # Log warnings if needed. We bind the Logger module directly so the
+    # `Logger.warning/1` macro resolves at compile time — calling
+    # `logger.warning(...)` over a runtime-bound variable would fail with
+    # `UndefinedFunctionError` because the macro is not exposed as a fn.
     if should_log do
       flag_types = Enum.map(security_flags, fn {:triggered, type, _} -> type end)
-      logger.warning("Form submission with security flags: #{inspect(flag_types)}")
+      Logger.warning("Form submission with security flags: #{inspect(flag_types)}")
     end
 
     # Add warnings to metadata
@@ -339,7 +342,7 @@ defmodule PhoenixKitEntities.Controllers.EntityFormController do
     {metadata, status} = apply_security_flags(metadata, security_flags, Logger)
 
     entity_data_params = %{
-      "entity_uuid" => entity.id,
+      "entity_uuid" => entity.uuid,
       "title" => title,
       "slug" => generate_slug(title),
       "status" => status,

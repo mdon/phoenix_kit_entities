@@ -103,6 +103,12 @@ Application.put_env(:phoenix_kit_entities, :test_repo_available, repo_available)
 {:ok, _pid} = PhoenixKit.ModuleRegistry.start_link([])
 {:ok, _pid} = PhoenixKit.Admin.SimplePresence.start_link([])
 
+# Mirror enable_all_*_mirror flows spawn supervised tasks under
+# PhoenixKit.TaskSupervisor (mirror file writes after definition
+# changes). Without this the publishing-precedent
+# GenServer.call(:noproc) bubbles up to the LV / context fn caller.
+{:ok, _pid} = Task.Supervisor.start_link(name: PhoenixKit.TaskSupervisor)
+
 # DataForm and EntityForm mount presence tracking via
 # `PhoenixKitEntities.Presence` (the module's own Phoenix.Tracker for
 # editing locks). Without this, every DataForm/EntityForm LV test

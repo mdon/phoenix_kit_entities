@@ -98,4 +98,126 @@ defmodule PhoenixKitEntities.Web.EntitiesSettingsLiveTest do
       assert log =~ "EntitiesSettings: unhandled handle_info"
     end
   end
+
+  describe "settings form events" do
+    test "validate + save events update settings without crashing",
+         %{conn: conn} = ctx do
+      {:ok, _} = Entities.enable_system(actor_uuid: ctx.actor_uuid)
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/settings/entities")
+
+      # Drive the events directly via render_hook since the page may
+      # have multiple forms (settings + mirror) and `form/2` on a bare
+      # selector ambiguates.
+      render_hook(view, "validate", %{
+        "settings" => %{"auto_generate_slugs" => "true"}
+      })
+
+      render_hook(view, "save", %{
+        "settings" => %{
+          "auto_generate_slugs" => "true",
+          "default_status" => "draft"
+        }
+      })
+
+      assert render(view) =~ "Entities System"
+    end
+
+    test "reset_to_defaults event doesn't crash",
+         %{conn: conn} = ctx do
+      {:ok, _} = Entities.enable_system(actor_uuid: ctx.actor_uuid)
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/settings/entities")
+
+      render_hook(view, "reset_to_defaults", %{})
+      assert render(view) =~ "Entities System"
+    end
+  end
+
+  describe "mirror toggle / export / import events" do
+    setup do
+      actor_uuid = Ecto.UUID.generate()
+
+      {:ok, entity} =
+        Entities.create_entity(
+          %{
+            name: "settings_widget",
+            display_name: "Settings Widget",
+            display_name_plural: "Settings Widgets",
+            fields_definition: [%{"type" => "text", "key" => "title", "label" => "Title"}],
+            created_by_uuid: actor_uuid
+          },
+          actor_uuid: actor_uuid
+        )
+
+      {:ok, entity: entity, actor_uuid: actor_uuid}
+    end
+
+    test "toggle_entity_definitions / toggle_entity_data round-trip",
+         %{conn: conn} = ctx do
+      {:ok, _} = Entities.enable_system(actor_uuid: ctx.actor_uuid)
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/settings/entities")
+
+      render_hook(view, "toggle_entity_definitions", %{"uuid" => ctx.entity.uuid})
+      render_hook(view, "toggle_entity_data", %{"uuid" => ctx.entity.uuid})
+      assert render(view) =~ "Entities System"
+    end
+
+    test "enable_all_definitions / disable_all_definitions doesn't crash",
+         %{conn: conn} = ctx do
+      {:ok, _} = Entities.enable_system(actor_uuid: ctx.actor_uuid)
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/settings/entities")
+
+      render_hook(view, "enable_all_definitions", %{})
+      render_hook(view, "disable_all_definitions", %{})
+      assert render(view) =~ "Entities System"
+    end
+
+    test "enable_all_data / disable_all_data doesn't crash",
+         %{conn: conn} = ctx do
+      {:ok, _} = Entities.enable_system(actor_uuid: ctx.actor_uuid)
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/settings/entities")
+
+      render_hook(view, "enable_all_data", %{})
+      render_hook(view, "disable_all_data", %{})
+      assert render(view) =~ "Entities System"
+    end
+
+    test "export_now / refresh_export_stats / export_entity_now don't crash",
+         %{conn: conn} = ctx do
+      {:ok, _} = Entities.enable_system(actor_uuid: ctx.actor_uuid)
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/settings/entities")
+
+      render_hook(view, "export_now", %{})
+      render_hook(view, "refresh_export_stats", %{})
+      render_hook(view, "export_entity_now", %{"uuid" => ctx.entity.uuid})
+      assert render(view) =~ "Entities System"
+    end
+
+    test "import-modal flow: show / set_tab / hide",
+         %{conn: conn} = ctx do
+      {:ok, _} = Entities.enable_system(actor_uuid: ctx.actor_uuid)
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/settings/entities")
+
+      render_hook(view, "show_import_modal", %{})
+      render_hook(view, "set_import_tab", %{"entity" => ctx.entity.name})
+      render_hook(view, "hide_import_modal", %{})
+      assert render(view) =~ "Entities System"
+    end
+
+    test "do_import event doesn't crash (no entities to import)",
+         %{conn: conn} = ctx do
+      {:ok, _} = Entities.enable_system(actor_uuid: ctx.actor_uuid)
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/settings/entities")
+
+      render_hook(view, "do_import", %{})
+      assert render(view) =~ "Entities System"
+    end
+  end
 end
