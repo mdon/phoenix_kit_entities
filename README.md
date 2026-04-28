@@ -147,8 +147,7 @@ lib/
       entities.ex                      # Entity list LiveView (inline template)
       entity_form.ex                   # Entity definition builder LiveView
       data_navigator.ex                # Data record browser LiveView
-      data_form.ex                     # Data record form LiveView
-      data_view.ex                     # Data record read-only view
+      data_form.ex                     # Data record form LiveView (handles new/show/edit)
       entities_settings.ex             # Module settings LiveView
       hooks.ex                         # Shared LiveView hooks
 ```

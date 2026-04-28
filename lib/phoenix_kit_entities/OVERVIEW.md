@@ -41,8 +41,7 @@ lib/modules/entities/
     ├── entities.ex / .html.heex         # Entity dashboard
     ├── entity_form.ex / .html.heex      # Create/update entity definitions + public form config
     ├── data_navigator.ex / .html.heex   # Browse/filter records per entity
-    ├── data_form.ex / .html.heex        # Create/update individual records
-    ├── data_view.ex                     # Read-only view component
+    ├── data_form.ex / .html.heex        # Create/update individual records (handles new/show/edit)
     ├── entities_settings.ex / .html.heex# System configuration
     └── hooks.ex                         # LiveView hooks for entity pages
 

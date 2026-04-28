@@ -708,7 +708,6 @@ handle_event("toggle_status", %{"id" => id}, socket)
 **Files**:
 - `lib/modules/entities/web/data_form.ex`
 - `lib/modules/entities/web/data_form.html.heex`
-- `lib/modules/entities/web/data_view.ex` (for :show action)
 
 > **Note**: Routes use `:entity_slug` (not `:entity_id`).
 
