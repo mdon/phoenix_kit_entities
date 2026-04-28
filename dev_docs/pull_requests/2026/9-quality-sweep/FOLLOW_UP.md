@@ -190,6 +190,130 @@ Pre-existing log spam from core `Settings.get_boolean_setting/2` (returns
 suppression lives upstream in core, not in this module's `enabled?/0`
 which already has both `rescue _ -> false` and `catch :exit, _ -> false`.
 
+## Fixed (Batch 4 — coverage push 2026-04-28)
+
+`mix test --cover` push from the post-Batch-3 baseline of **31.39%** to
+**67.33%** using only `mix test --cover` — no Mox / no excoveralls / no
+Bypass / no external HTTP stubs. +240 tests (405 → 645), 5/5 stable.
+
+### Production bug fixes surfaced by the controller test
+
+Three real bugs found by writing the public-form controller's first
+test. None had been previously test-covered; the success path crashed
+on every submission in production.
+
+- ~~`entity_form_controller.ex:243 + 342` `entity.id`~~ — primary key
+  on the Entity schema is `:uuid` (UUIDv7 convention), not `:id`. Both
+  call sites would have crashed with `KeyError` on every public-form
+  submission. Fixed to `entity.uuid`.
+- ~~`entity_form_controller.ex:299` `logger.warning(...)`~~ — variable-
+  bound macro dispatch doesn't resolve to `Logger.warning/1`
+  (macros aren't atom-callable). Affected: every `save_log` security
+  flag path raised `UndefinedFunctionError`. Fixed to call
+  `Logger.warning(...)` directly + dropped the unused `_logger`
+  parameter.
+
+### New test files
+
+11 new test files covering the 0%-coverage modules and gap-filling for
+the mid-tier modules:
+
+- `mirror/storage_test.exs` (17 tests) — settings toggles, path
+  resolution, write/read/delete round-trip, list_entities, get_stats.
+- `mirror/exporter_test.exs` (12 tests) — serialize_entity,
+  serialize_entity_data, export_entity (struct + name), export_*_data,
+  export_all + with/without data mirroring branches.
+- `mirror/importer_test.exs` (18 tests) — `:skip` / `:overwrite` /
+  `:merge` strategies on definitions + data records, no-slug branch,
+  preview_import, detect_conflicts, import_all, import_selected.
+- `sitemap_source_test.exs` (11 tests) — every callback with auto-pattern
+  toggles, metadata-exclude + draft-status filtering.
+- `url_resolver_extras_test.exs` (24 tests) — gap-fills the existing
+  `url_resolver_test.exs`.
+- `entity_data_extras_test.exs` (39 tests) — list_*, get*, position
+  helpers, search, filter_by_status, bulk_*, translation helpers,
+  public_path/url/alternates.
+- `context_extras_test.exs` (41 tests) — top-level PhoenixKitEntities
+  module surface (stats, counts, callbacks, sort-mode, mirror
+  settings, definition translations).
+- `form_builder_render_test.exs` (20 tests) — build_field/3 per type
+  + build_fields/3 + get_field_value/2.
+- `activity_log_extras_test.exs` (4 tests) — log/1 happy path +
+  with_log/2 :ok / :error branches.
+- `controllers/entity_form_controller_test.exs` (20 tests) — every
+  submit/2 branch (entity-not-found, public-form-disabled,
+  honeypot triggers, time-check, X-Forwarded-For metadata + RFC1918
+  rejection, browser/OS/device parsing, save_suspicious + save_log
+  flag handling, redirect-back fallback).
+- `components/entity_form_test.exs` (7 tests) — every cond branch in
+  render/1 (missing slug, unknown entity, form disabled, fields empty,
+  honeypot on, full happy-path).
+
+### Existing LV smoke tests extended (handle_event coverage)
+
+- `data_form_live_test`: validate / save / reset / generate_slug,
+  new-form mount.
+- `entity_form_live_test`: icon picker, field management (add / edit /
+  cancel / delete / reorder), select-type options, public form
+  settings, security toggles, backup toggles + export, save / reset.
+- `entities_settings_live_test`: validate / save / reset_to_defaults,
+  mirror toggles, export flows, import-modal flow.
+- `data_navigator_live_test`: toggle_status (status cycle),
+  restore_data, selection events, bulk_action (change_status /
+  delete / empty-selection error path).
+
+### Test infra additions
+
+- `test/support/postgres/migrations/20260428000000_add_role_tables.exs`
+  — new migration with `phoenix_kit_user_roles` +
+  `phoenix_kit_user_role_assignments`. Required because
+  `Mirror.Importer.create_entity_from_import/1` calls
+  `Auth.get_first_admin/0` / `get_first_user/0`, both of which query
+  the role-assignments table. Created as a new migration (rather than
+  editing the original) so existing test DBs pick up the schema change
+  without a `dropdb`.
+- `test_helper.exs`: starts `PhoenixKit.TaskSupervisor` so async paths
+  in `Mirror.Exporter` / context-fn `notify_*_event` don't crash with
+  `:noproc` (publishing-Batch-5 test-helper precedent).
+
+### Per-module coverage uplifts
+
+| Module | Before | After |
+|--------|--------|-------|
+| Mirror.Exporter | 0% | 90.74% |
+| Mirror.Importer | 0% | 79.30% |
+| Mirror.Storage | 16.47% | 76.47% |
+| SitemapSource | 0% | 76.79% |
+| Components.EntityForm | 0% | 100% |
+| Controllers.EntityFormController | 0% | 75.96% |
+| ActivityLog | 23% | 53.85% |
+| Web.EntitiesSettings | 25.43% | 81.17% |
+| Web.EntityForm | 27.08% | 72.31% |
+| Web.DataForm | 28.46% | 54.39% |
+| UrlResolver | 33.61% | 64.71% |
+| FormBuilder | 35.34% | 80.75% |
+| EntityData | 50.15% | 79.30% |
+| top-level PhoenixKitEntities | 53.55% | 86.17% |
+| **Total** | **31.39%** | **67.33%** |
+
+### What's still uncovered (deliberate residual)
+
+- **Mix.Tasks.PhoenixKitEntities.Export / Import** —
+  `Mix.Task.run("app.start")` requires a full app boot, not viable in
+  the test sandbox.
+- **PhoenixKitEntities.Migrations.V1** — runs at test_helper boot
+  before `:cover` starts (canonical residual per workspace AGENTS.md).
+- **PhoenixKitEntities.Web.DataView** — unrouted dead code (no callers
+  anywhere; surfaced for boss decision above).
+- **DataForm / DataNavigator handlers that push_patch to URLs outside
+  the test router scope** (`/phoenix_kit/...` prefix) — would need an
+  extended test router or parent-app integration tests.
+- **ActivityLog `Logger.warning` + `:exit` rescue branches** — only
+  reachable from sandbox-shutdown / non-Postgrex exception paths that
+  aren't deterministically triggerable.
+- **UrlResolver branches that depend on Languages being enabled
+  (multilang mode)** — single-language mode is what tests run under.
+
 ## Open
 
 None.
