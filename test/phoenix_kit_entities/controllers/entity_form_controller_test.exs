@@ -14,6 +14,7 @@ defmodule PhoenixKitEntities.Controllers.EntityFormControllerTest do
 
   alias PhoenixKitEntities, as: Entities
   alias PhoenixKitEntities.Controllers.EntityFormController
+  alias PhoenixKitEntities.EntityData
 
   @endpoint PhoenixKitEntities.Test.Endpoint
 
@@ -216,8 +217,7 @@ defmodule PhoenixKitEntities.Controllers.EntityFormControllerTest do
 
     test "form submitted slowly enough → success", %{entity: entity} do
       Entities.update_entity(entity, %{
-        settings:
-          Map.merge(entity.settings, %{"public_form_time_check" => true})
+        settings: Map.merge(entity.settings, %{"public_form_time_check" => true})
       })
 
       # _form_loaded_at = 30s ago → passes
@@ -269,14 +269,25 @@ defmodule PhoenixKitEntities.Controllers.EntityFormControllerTest do
         }
       }
 
+      before_count = EntityData.list_by_entity(entity.uuid) |> length()
+
       result = simple_invoke(conn, params)
 
       assert result.status in [302, 303]
+
       assert Phoenix.Flash.get(result.assigns.flash, :info) =~ "submit" or
                Phoenix.Flash.get(result.assigns.flash, :info) =~ "success"
 
-      # No-op assertion to ensure the var binding doesn't get optimised away.
-      _ = entity
+      # The bug this test originally caught (entity.id → entity.uuid KeyError)
+      # would have crashed before the redirect — but a future regression that
+      # silently skips the insert would still hit the redirect path. Assert on
+      # the Repo state so silent data loss fails the test too.
+      records_after = EntityData.list_by_entity(entity.uuid)
+      assert length(records_after) == before_count + 1
+
+      assert Enum.any?(records_after, fn r ->
+               get_in(r.data, ["title"]) == "Submitted via public form"
+             end)
     end
 
     test "filters fields not in public_form_fields allowlist", %{entity: entity} do
