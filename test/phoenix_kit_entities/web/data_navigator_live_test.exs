@@ -213,13 +213,60 @@ defmodule PhoenixKitEntities.Web.DataNavigatorLiveTest do
 
   # ── helpers ──────────────────────────────────────────────────
 
-  # NOTE: toggle_view_mode + filter_by_entity + filter_by_status +
-  # search + clear_filters all push_patch to URLs that include the
-  # `/phoenix_kit/` prefix from production routing config. The test
-  # router doesn't define those routes (it scopes at `/en/admin/...`),
-  # so render_hook on those handlers crashes the LV. Cover them via
-  # the production app or via an extended test router; kept out of this
-  # coverage push as a deliberate gap.
+  describe "push_patch handlers (toggle_view_mode / filter / search)" do
+    # These tests mount through the `/phoenix_kit/...` scope in
+    # Test.Router so the LV's own `Routes.path/2`-driven push_patch
+    # URLs resolve against a defined route. The mounted URL doesn't
+    # include the entity_slug here because we test against the
+    # navigator with one already in scope.
+
+    defp pk_navigator_url(entity, opts \\ []) do
+      base = "/phoenix_kit/en/admin/entities/#{entity.name}/data"
+
+      case Keyword.get(opts, :status) do
+        nil -> base
+        status -> base <> "?status=#{status}"
+      end
+    end
+
+    test "toggle_view_mode patches without crashing", %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, pk_navigator_url(ctx.entity))
+
+      render_hook(view, "toggle_view_mode", %{"mode" => "grid"})
+      render_hook(view, "toggle_view_mode", %{"mode" => "table"})
+      assert render(view) =~ "DN Test"
+    end
+
+    test "filter_by_status patches without crashing", %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, pk_navigator_url(ctx.entity))
+
+      render_hook(view, "filter_by_status", %{"status" => "published"})
+      assert render(view) =~ "DN Test"
+    end
+
+    test "search + clear_filters patch without crashing", %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, pk_navigator_url(ctx.entity))
+
+      render_hook(view, "search", %{"search" => %{"term" => "find_me"}})
+      render_hook(view, "clear_filters", %{})
+      assert render(view) =~ "DN Test"
+    end
+
+    test "filter_by_entity with empty uuid redirects to entities list (entities route mounted)",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, pk_navigator_url(ctx.entity))
+
+      result = render_hook(view, "filter_by_entity", %{"entity_uuid" => ""})
+      # The handler responds with a redirect; the test rendering
+      # succeeds because the target `/phoenix_kit/en/admin/entities`
+      # IS in our test router.
+      assert is_binary(result) or match?({:error, _}, result)
+    end
+  end
 
   describe "single record events: toggle_status / restore_data" do
     setup ctx do

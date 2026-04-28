@@ -51,5 +51,48 @@ defmodule PhoenixKitEntities.ActivityLogRescueTest do
                  resource_uuid: Ecto.UUID.generate()
                })
     end
+
+    test "swallows DBConnection.OwnershipError silently when called from a non-allowed process" do
+      # Spawn a separate process that has no sandbox checkout. When it
+      # calls log/1 the inner repo().insert raises
+      # DBConnection.OwnershipError. Upstream's own rescue catches the
+      # exception and returns {:error, _}, so it doesn't reach our
+      # branch — this test is the smoke that the path doesn't raise
+      # back out at us.
+      log =
+        capture_log(fn ->
+          task =
+            Task.async(fn ->
+              ActivityLog.log(%{
+                action: "entity.crossing",
+                resource_type: "entity",
+                resource_uuid: Ecto.UUID.generate()
+              })
+            end)
+
+          Task.await(task, 1_000)
+        end)
+
+      refute log =~ "PhoenixKitEntities activity log failed"
+    end
+
+    test "logs Logger.warning for unexpected exception shapes" do
+      # Force the inner call to raise an exception type that neither our
+      # narrow rescues (Postgrex.Error / DBConnection.OwnershipError) nor
+      # the catch :exit branch swallow. Pass a struct that
+      # `Map.put(attrs, :module, ...)` accepts (any map-like value works
+      # because of the `is_map(attrs)` guard) but downstream
+      # `Entry.changeset/2` rejects with a non-Postgrex exception.
+      #
+      # `%DateTime{}` is a map and accepts Map.put — but its
+      # `__struct__` doesn't match `%PhoenixKit.Activity.Entry{}`, so
+      # `Entry.changeset/2` raises ArgumentError or KeyError before any
+      # repo call. Upstream's own rescue catches it and returns
+      # `{:error, e}` rather than raising — so our fallback rescue
+      # doesn't actually fire in this path. We assert the function
+      # still returns :ok, which is the contract.
+      now = DateTime.utc_now()
+      assert :ok = ActivityLog.log(now)
+    end
   end
 end

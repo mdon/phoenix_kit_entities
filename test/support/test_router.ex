@@ -47,4 +47,21 @@ defmodule PhoenixKitEntities.Test.Router do
       live("/", EntitiesSettings, :index, as: :entities_settings)
     end
   end
+
+  # Mirror routes under the production `/phoenix_kit/` prefix so the
+  # DataNavigator's `push_patch` calls (which prepend `Routes.path/2`
+  # output, including the configured PhoenixKit URL prefix) resolve in
+  # tests. Without this, every render_hook on a filter / search /
+  # toggle_view_mode handler crashes with "cannot invoke
+  # handle_params nor navigate/patch to /phoenix_kit/...".
+  scope "/phoenix_kit/en/admin/entities", PhoenixKitEntities.Web do
+    pipe_through(:browser)
+
+    live_session :entities_test_pk_prefix,
+      layout: {PhoenixKitEntities.Test.Layouts, :app},
+      on_mount: {PhoenixKitEntities.Test.Hooks, :assign_scope} do
+      live("/", Entities, :index, as: :entities_pk)
+      live("/:entity_slug/data", DataNavigator, :entity, as: :data_navigator_pk)
+    end
+  end
 end
