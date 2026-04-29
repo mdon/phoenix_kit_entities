@@ -17,10 +17,55 @@ defmodule PhoenixKitEntities.Web.EntitiesSettings do
 
   @impl true
   def mount(_params, _session, socket) do
+    # Defer DB queries (settings reads, entities list, stats) to handle_params/3
+    # — mount runs twice (HTTP + WebSocket), handle_params runs once. See
+    # Phoenix iron law.
+    if connected?(socket) do
+      Events.subscribe_to_all_data()
+    end
+
+    socket =
+      socket
+      |> assign(:page_title, gettext("Entities Settings"))
+      |> assign(:project_title, nil)
+      |> assign(:settings, %{})
+      |> assign(:changeset, nil)
+      |> assign(:entities_stats, %{})
+      |> assign(:entities_list, [])
+      |> assign(:mirror_path, nil)
+      |> assign(:export_stats, %{})
+      |> assign(:import_preview, nil)
+      |> assign(:import_selections, %{})
+      |> assign(:import_active_tab, nil)
+      |> assign(:show_import_modal, false)
+      |> assign(:importing, false)
+      |> assign(:exporting, false)
+
+    {:ok, socket}
+  end
+
+  @impl true
+  def handle_params(_params, _uri, socket) do
     project_title = Settings.get_project_title()
 
-    # Load current entities settings
-    settings = %{
+    settings = load_settings()
+    changeset = build_changeset(settings)
+
+    socket =
+      socket
+      |> assign(:project_title, project_title)
+      |> assign(:settings, settings)
+      |> assign(:changeset, changeset)
+      |> assign(:entities_stats, get_entities_stats())
+      |> assign(:entities_list, Entities.list_entities_with_mirror_status())
+      |> assign(:mirror_path, Storage.root_path())
+      |> assign(:export_stats, Storage.get_stats())
+
+    {:noreply, socket}
+  end
+
+  defp load_settings do
+    %{
       entities_enabled: Entities.enabled?(),
       auto_generate_slugs: Settings.get_setting("entities_auto_generate_slugs", "true"),
       default_status: Settings.get_setting("entities_default_status", "draft"),
@@ -30,32 +75,6 @@ defmodule PhoenixKitEntities.Web.EntitiesSettings do
       enable_revisions: Settings.get_setting("entities_enable_revisions", "false"),
       enable_comments: Settings.get_setting("entities_enable_comments", "false")
     }
-
-    changeset = build_changeset(settings)
-
-    socket =
-      socket
-      |> assign(:page_title, gettext("Entities Settings"))
-      |> assign(:project_title, project_title)
-      |> assign(:settings, settings)
-      |> assign(:changeset, changeset)
-      |> assign(:entities_stats, get_entities_stats())
-      # Per-entity mirror settings
-      |> assign(:entities_list, Entities.list_entities_with_mirror_status())
-      |> assign(:mirror_path, Storage.root_path())
-      |> assign(:export_stats, Storage.get_stats())
-      |> assign(:import_preview, nil)
-      |> assign(:import_selections, %{})
-      |> assign(:import_active_tab, nil)
-      |> assign(:show_import_modal, false)
-      |> assign(:importing, false)
-      |> assign(:exporting, false)
-
-    if connected?(socket) do
-      Events.subscribe_to_all_data()
-    end
-
-    {:ok, socket}
   end
 
   @impl true
@@ -72,16 +91,7 @@ defmodule PhoenixKitEntities.Web.EntitiesSettings do
         case save_settings(settings_params) do
           :ok ->
             # Refresh settings and stats
-            new_settings = %{
-              entities_enabled: Entities.enabled?(),
-              auto_generate_slugs: Settings.get_setting("entities_auto_generate_slugs", "true"),
-              default_status: Settings.get_setting("entities_default_status", "draft"),
-              require_approval: Settings.get_setting("entities_require_approval", "false"),
-              max_entities_per_user: Settings.get_setting("entities_max_per_user", "100"),
-              data_retention_days: Settings.get_setting("entities_data_retention_days", "365"),
-              enable_revisions: Settings.get_setting("entities_enable_revisions", "false"),
-              enable_comments: Settings.get_setting("entities_enable_comments", "false")
-            }
+            new_settings = load_settings()
 
             socket =
               socket

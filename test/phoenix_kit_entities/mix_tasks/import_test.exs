@@ -32,9 +32,9 @@ defmodule Mix.Tasks.PhoenixKitEntities.ImportTest do
 
     {:ok, _} =
       Repo.query(
-        "INSERT INTO phoenix_kit_users (uuid, email, is_active, account_type) " <>
-          "VALUES ($1::uuid, $2, true, 'personal') ON CONFLICT (uuid) DO NOTHING",
-        [Ecto.UUID.dump!(user_uuid), "import-task-test@example.com"]
+        "INSERT INTO phoenix_kit_users (uuid, email, hashed_password, is_active, account_type, inserted_at, updated_at) " <>
+          "VALUES ($1::uuid, $2, $3, true, 'person', NOW(), NOW()) ON CONFLICT (uuid) DO NOTHING",
+        [Ecto.UUID.dump!(user_uuid), "import-task-test@example.com", "$2b$12$placeholder"]
       )
 
     # Pre-seed an entity-export file so the importer has something to read.

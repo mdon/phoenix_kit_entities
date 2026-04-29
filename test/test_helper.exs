@@ -15,8 +15,8 @@
 # - PhoenixKitEntities.DataCase (test/support/data_case.ex)
 # - PhoenixKitEntities.ActivityLogAssertions
 #   (test/support/activity_log_assertions.ex)
-# - Test migration (test/support/postgres/migrations/) — settings,
-#   activities, entities, and entity_data tables
+# - Schema setup runs core's versioned migrations directly via
+#   `PhoenixKit.Migration` — no module-owned test DDL.
 
 alias PhoenixKitEntities.Test.Repo, as: TestRepo
 
@@ -57,11 +57,11 @@ repo_available =
     try do
       {:ok, _} = TestRepo.start_link()
 
-      # Run the test migration that creates settings, activities, and the
-      # module-owned tables (entities + entity_data). Idempotent via
-      # `create_if_not_exists`.
-      migration_path = Path.expand("support/postgres/migrations", __DIR__)
-      Ecto.Migrator.run(TestRepo, migration_path, :up, all: true, log: false)
+      # Build the schema directly from core's versioned migrations — same
+      # call the host app makes in production. The entities tables come from
+      # core (V17 creates them; V40/V58/V67/V74/V81 evolve them). No
+      # module-owned DDL anywhere.
+      Ecto.Migrator.run(TestRepo, [{0, PhoenixKit.Migration}], :up, all: true, log: false)
 
       Ecto.Adapters.SQL.Sandbox.mode(TestRepo, :manual)
 

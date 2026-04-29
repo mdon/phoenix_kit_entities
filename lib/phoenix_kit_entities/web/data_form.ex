@@ -26,59 +26,71 @@ defmodule PhoenixKitEntities.Web.DataForm do
   @preserve_fields %{"title" => :title, "slug" => :slug, "status" => :status}
 
   @impl true
-  def mount(%{"entity_slug" => entity_slug, "uuid" => uuid} = params, _session, socket) do
-    # Set locale for LiveView process
-    locale =
-      params["locale"] || socket.assigns[:current_locale]
+  def mount(_params, _session, socket) do
+    # Defer DB queries (entity load, data record load) and presence init to
+    # handle_params/3 — mount runs twice (HTTP + WebSocket), handle_params
+    # runs once. See Phoenix iron law.
+    {:ok, socket}
+  end
+
+  @impl true
+  def handle_params(%{"entity_slug" => entity_slug, "uuid" => uuid} = params, _uri, socket) do
+    locale = params["locale"] || socket.assigns[:current_locale]
 
     # Edit mode with slug
     entity = Entities.get_entity_by_name(entity_slug, lang: locale)
     data_record = EntityData.get!(uuid, lang: locale)
     changeset = EntityData.change(data_record)
 
-    mount_data_form(socket, entity, data_record, changeset, gettext("Edit Data"), locale)
+    {:ok, socket} =
+      hydrate_data_form(socket, entity, data_record, changeset, gettext("Edit Data"), locale)
+
+    {:noreply, socket}
   end
 
-  def mount(%{"entity_id" => entity_uuid, "id" => id} = params, _session, socket) do
-    # Set locale for LiveView process
-    locale =
-      params["locale"] || socket.assigns[:current_locale]
+  def handle_params(%{"entity_id" => entity_uuid, "id" => id} = params, _uri, socket) do
+    locale = params["locale"] || socket.assigns[:current_locale]
 
     # Edit mode with ID (backwards compat)
     entity = Entities.get_entity!(entity_uuid, lang: locale)
     data_record = EntityData.get!(id, lang: locale)
     changeset = EntityData.change(data_record)
 
-    mount_data_form(socket, entity, data_record, changeset, gettext("Edit Data"), locale)
+    {:ok, socket} =
+      hydrate_data_form(socket, entity, data_record, changeset, gettext("Edit Data"), locale)
+
+    {:noreply, socket}
   end
 
-  def mount(%{"entity_slug" => entity_slug} = params, _session, socket) do
-    # Set locale for LiveView process
-    locale =
-      params["locale"] || socket.assigns[:current_locale]
+  def handle_params(%{"entity_slug" => entity_slug} = params, _uri, socket) do
+    locale = params["locale"] || socket.assigns[:current_locale]
 
     # Create mode with slug
     entity = Entities.get_entity_by_name(entity_slug, lang: locale)
     data_record = %EntityData{entity_uuid: entity.uuid}
     changeset = EntityData.change(data_record)
 
-    mount_data_form(socket, entity, data_record, changeset, gettext("New Data"), locale)
+    {:ok, socket} =
+      hydrate_data_form(socket, entity, data_record, changeset, gettext("New Data"), locale)
+
+    {:noreply, socket}
   end
 
-  def mount(%{"entity_id" => entity_uuid} = params, _session, socket) do
-    # Set locale for LiveView process
-    locale =
-      params["locale"] || socket.assigns[:current_locale]
+  def handle_params(%{"entity_id" => entity_uuid} = params, _uri, socket) do
+    locale = params["locale"] || socket.assigns[:current_locale]
 
     # Create mode with ID (backwards compat)
     entity = Entities.get_entity!(entity_uuid, lang: locale)
     data_record = %EntityData{entity_uuid: entity.uuid}
     changeset = EntityData.change(data_record)
 
-    mount_data_form(socket, entity, data_record, changeset, gettext("New Data"), locale)
+    {:ok, socket} =
+      hydrate_data_form(socket, entity, data_record, changeset, gettext("New Data"), locale)
+
+    {:noreply, socket}
   end
 
-  defp mount_data_form(socket, entity, data_record, changeset, page_title, locale) do
+  defp hydrate_data_form(socket, entity, data_record, changeset, page_title, locale) do
     project_title = Settings.get_project_title()
     current_user = socket.assigns[:phoenix_kit_current_user]
 
@@ -128,12 +140,12 @@ defmodule PhoenixKitEntities.Web.DataForm do
       |> assign(:has_unsaved_changes, false)
       |> mount_multilang()
 
-    socket = mount_data_presence(socket, entity, data_record, form_record_key, current_user)
+    socket = hydrate_data_presence(socket, entity, data_record, form_record_key, current_user)
 
     {:ok, socket}
   end
 
-  defp mount_data_presence(socket, entity, data_record, form_record_key, current_user) do
+  defp hydrate_data_presence(socket, entity, data_record, form_record_key, current_user) do
     if connected?(socket) do
       Events.subscribe_to_entity_data(entity.uuid)
       Events.subscribe_to_data_form(entity.uuid, form_record_key)
