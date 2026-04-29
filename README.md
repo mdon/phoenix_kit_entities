@@ -486,7 +486,7 @@ mix phoenix_kit_entities.import
 
 ## Database
 
-Database tables and migrations are managed by the parent PhoenixKit project. This repo provides `PhoenixKitEntities.Migrations.V1` as a library module that the parent app's migrations call — there are no migrations to run in this repo directly.
+Database tables and migrations are managed entirely by core PhoenixKit. The entities tables are created by core's `V17` migration and evolved by `V40` / `V58` / `V67` / `V74` / `V81`. The host app runs `PhoenixKit.Migrations.up()` once and gets everything — no module-owned DDL.
 
 ```elixir
 # Two tables:
@@ -518,7 +518,7 @@ mix test --exclude integration
 
 ### "entities_enabled" setting not found
 
-The settings are seeded by the migration. If using PhoenixKit core migrations, they're created by V17. If standalone, run the `PhoenixKitEntities.Migrations.V1` migration.
+The settings are seeded by core's `V17` migration. Run `PhoenixKit.Migrations.up()` in the host app to create them.
 
 ### Entity name validation fails
 
@@ -528,4 +528,4 @@ Names must be snake_case, start with a letter, 2-50 characters. Examples: `produ
 
 Force a clean rebuild: `mix deps.clean phoenix_kit_entities && mix deps.get && mix deps.compile phoenix_kit_entities --force && mix compile --force`
 
-> **Note:** Most production deploys see the entity tables created by core PhoenixKit's versioned migration `V17`. The local `PhoenixKitEntities.Migrations.V1` module provides an idempotent (`IF NOT EXISTS`) migration that's the source of truth for the test schema and for standalone host apps that don't use core's installer. The test helper creates the `uuid_generate_v7()` Postgres function directly when a test database is available.
+> **Note:** The entities tables are owned by core PhoenixKit. `V17` creates them; `V40` / `V58` / `V67` / `V74` / `V81` evolve them. The test suite builds its schema by running `PhoenixKit.Migrations.up()` against an isolated test repo — the same call the host app makes — so test schema and production schema cannot drift apart.

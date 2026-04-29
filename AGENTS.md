@@ -165,8 +165,10 @@ and Settings.
 - `phoenix_kit_entity_data` — Data records (instances) with JSONB
   `data` and `metadata` field values
 - Both use UUIDv7 primary keys
-- Migration in `PhoenixKitEntities.Migrations.V1` uses
-  `IF NOT EXISTS` for idempotency
+- Migrations are owned by core PhoenixKit (`V17` creates the tables;
+  `V40` / `V58` / `V67` / `V74` / `V81` evolve them). No module-owned
+  DDL anywhere — the host app runs `PhoenixKit.Migrations.up()` and
+  gets everything.
 
 ### Activity Logging Pattern
 
@@ -240,7 +242,6 @@ lib/phoenix_kit_entities/
 ├── url_resolver.ex                              # Shared URL pattern resolution
 ├── components/                                  # Function components
 ├── controllers/entity_form_controller.ex        # Public form submission endpoint
-├── migrations/v1.ex                             # Idempotent table-creation migration
 ├── mirror/{exporter,importer,storage}.ex        # Filesystem mirror subsystem
 ├── mix_tasks/{export,import}.ex                 # Mix tasks for bulk export/import
 └── web/                                         # Admin LiveViews
@@ -363,19 +364,19 @@ CSS classes from our templates.
 
 ## Database & Migrations
 
-The module owns two tables (`phoenix_kit_entities` and
-`phoenix_kit_entity_data`), declared in
-`PhoenixKitEntities.Migrations.V1`. The migration uses `IF NOT EXISTS`
-guards so it's idempotent and safe to re-run. The parent
-`phoenix_kit` project also re-applies these tables in its versioned
-migrations (V17), so most production deploys see them created via
-core. The local `V1` migration is the source of truth for the test
-schema and for standalone host apps that don't use core's installer.
+This module owns **no** DDL. The two tables it relies on
+(`phoenix_kit_entities` and `phoenix_kit_entity_data`) are created and
+maintained by core PhoenixKit's versioned migrations: `V17` creates
+them; `V40` / `V58` / `V67` / `V74` / `V81` evolve them (UUID PK
+addition, timestamp columns, FK conversions, `position` column).
 
-UUIDv7 primary keys throughout. The
-`uuid_generate_v7()` Postgres function comes from
-`PhoenixKit.Migration.SQLHelpers.uuid_generate_v7_function/0` (core).
-Test infra creates it directly — see `test/support/postgres/migrations/`.
+The host app runs `PhoenixKit.Migrations.up()` once and gets the full
+schema. The test suite does the same against an isolated test repo
+(see `test/test_helper.exs`) — same call, same migrations, no chance
+of drift.
+
+UUIDv7 primary keys throughout. The `uuid_generate_v7()` Postgres
+function is created by core's V40.
 
 ## Testing
 
@@ -422,10 +423,10 @@ Without this, all DB calls through `PhoenixKit.RepoHelper` crash with
   hook for injecting `phoenix_kit_current_scope` into LiveView mount
   via session, with `LiveCase.put_test_scope/2` + `fake_scope/1`
   helpers)
-- `test/support/postgres/migrations/` — creates
-  `phoenix_kit_entities`, `phoenix_kit_entity_data`,
-  `phoenix_kit_settings`, `phoenix_kit_activities`, plus the
-  `uuid_generate_v7()` function
+
+Schema setup runs core's versioned migrations directly via
+`Ecto.Migrator.run(TestRepo, [{0, PhoenixKit.Migration}], :up, ...)`
+in `test_helper.exs` — no module-owned test DDL.
 
 ### Running tests
 
