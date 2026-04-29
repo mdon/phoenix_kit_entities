@@ -29,23 +29,32 @@ defmodule PhoenixKitEntities.Web.EntityForm do
   alias PhoenixKitEntities.PresenceHelpers
 
   @impl true
-  def mount(%{"id" => id} = _params, _session, socket) do
+  def mount(_params, _session, socket) do
+    # Defer DB query to handle_params/3 — mount runs twice (HTTP + WebSocket),
+    # handle_params runs once. See Phoenix iron law.
+    {:ok, socket}
+  end
+
+  @impl true
+  def handle_params(%{"id" => id} = _params, _uri, socket) do
     # Edit mode
     entity = Entities.get_entity!(id)
     changeset = Entities.change_entity(entity)
 
-    mount_entity_form(socket, entity, changeset, gettext("Edit Entity"))
+    {:ok, socket} = hydrate_entity_form(socket, entity, changeset, gettext("Edit Entity"))
+    {:noreply, socket}
   end
 
-  def mount(_params, _session, socket) do
+  def handle_params(_params, _uri, socket) do
     # Create mode
     entity = %Entities{}
     changeset = Entities.change_entity(entity)
 
-    mount_entity_form(socket, entity, changeset, gettext("New Entity"))
+    {:ok, socket} = hydrate_entity_form(socket, entity, changeset, gettext("New Entity"))
+    {:noreply, socket}
   end
 
-  defp mount_entity_form(socket, entity, _changeset, page_title) do
+  defp hydrate_entity_form(socket, entity, _changeset, page_title) do
     project_title = Settings.get_project_title()
     current_user = socket.assigns[:phoenix_kit_current_user]
 
@@ -93,12 +102,12 @@ defmodule PhoenixKitEntities.Web.EntityForm do
       |> assign(:sort_mode, Entities.get_sort_mode(entity))
       |> mount_multilang()
 
-    socket = mount_entity_presence(socket, form_key, entity, current_user)
+    socket = hydrate_entity_presence(socket, form_key, entity, current_user)
 
     {:ok, socket}
   end
 
-  defp mount_entity_presence(socket, form_key, entity, current_user) do
+  defp hydrate_entity_presence(socket, form_key, entity, current_user) do
     if (connected?(socket) and form_key) && entity.uuid do
       {:ok, _ref} =
         PresenceHelpers.track_editing_session(:entity, entity.uuid, socket, current_user)

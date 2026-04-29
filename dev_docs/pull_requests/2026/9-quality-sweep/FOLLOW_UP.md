@@ -401,7 +401,6 @@ the `OwnershipError` first), and unexpected-shape path (passes
 
 ### What's still uncovered (genuine residual now)
 
-- `Migrations.V1` — runs at test_helper boot before `:cover` starts.
 - `ActivityLog :exit` catch — only fires on sandbox-shutdown signals
   during teardown, not deterministically triggerable.
 - `UrlResolver primary_language_base?` DB-outage rescues — upstream
@@ -414,6 +413,91 @@ the `OwnershipError` first), and unexpected-shape path (passes
 These are caps; pushing past them needs Mox / Bypass / Oban Pro or
 mirroring every production route in `Test.Router`. Both are beyond
 the no-deps constraint.
+
+## Fixed (Batch 6 — drop hand-rolled migrations 2026-04-29)
+
+The entities tables are owned by core PhoenixKit (V17 creates them;
+V40 / V58 / V67 / V74 / V81 evolve them). The module's own
+`PhoenixKitEntities.Migrations.V1` was dead code — nobody called it.
+The `test/support/postgres/migrations/` tree duplicated core's DDL by
+hand and had drifted from the real schema. Boss's directive: no
+migration code in individual modules; tests build schema from core's
+migrations directly.
+
+- ~~**Delete `lib/phoenix_kit_entities/migrations/v1.ex`**~~ (311
+  lines) — dead code; zero callers in `lib/`, `test/`, or
+  `phoenix_kit_parent`.
+- ~~**Delete `test/support/postgres/migrations/`**~~ (210 lines across
+  two files) — replaced by a single
+  `Ecto.Migrator.run(TestRepo, [{0, PhoenixKit.Migration}], :up, ...)`
+  call in `test_helper.exs`.
+- ~~**Update README.md / AGENTS.md V1 references**~~ — rewritten to
+  point at core's V17/V40/V58/V67/V74/V81. README now reads "no
+  module-owned DDL" and AGENTS.md "Database & Migrations" describes
+  the core-only ownership.
+
+**Latent fixture bugs surfaced by the swap** (the duplicated DDL had
+been more permissive than production):
+
+| Fixture had | Real schema requires | Fixed in |
+|---|---|---|
+| `phoenix_kit_users.hashed_password` nullable | NOT NULL | `importer_test.exs`, `mix_tasks/import_test.exs` |
+| `inserted_at` / `updated_at` nullable | NOT NULL | same |
+| `account_type = 'personal'` | CHECK requires `'person'` or `'organization'` | same |
+
+Net diff: −521 lines DDL, +5 lines fixture corrections. 684 tests / 0
+failures, 10/10 stable, `mix precommit` clean.
+
+## Fixed (Batch 7 — CLAUDE_REVIEW.md follow-ups 2026-04-29)
+
+Post-merge review at `CLAUDE_REVIEW.md` flagged that the PR closed
+mount/3 DB queries for `Web.Entities` + `Web.DataNavigator` but left
+the same pattern in three other LVs. Closing those out per the boss's
+direction.
+
+- ~~**`web/entity_form.ex` mount/3 → handle_params/3**~~ — single
+  default-only `mount/3`; two `handle_params/3` clauses (`%{"id" =>
+  id}` for edit, fallthrough for create) handle the
+  `Entities.get_entity!/1` load + presence init via the renamed
+  `hydrate_entity_form/4` and `hydrate_entity_presence/4` helpers.
+- ~~**`web/entities_settings.ex` mount/3 → handle_params/3**~~ —
+  mount sets defaults (`settings: %{}`, `entities_list: []`, etc.) and
+  subscribes to events when `connected?(socket)`; `handle_params/3`
+  loads `Entities.enabled?/0`, the eight `Settings.get_setting/2`
+  reads (now consolidated through a private `load_settings/0`),
+  `Entities.list_entities_with_mirror_status/0`, `Storage.root_path/0`,
+  and `Storage.get_stats/0`. The `handle_event("save", ...)` clause
+  also routes through `load_settings/0`, deduplicating the previously
+  inline 8-key map.
+- ~~**`web/data_form.ex` mount/3 → handle_params/3**~~ — single
+  default-only `mount/3`; four `handle_params/3` clauses (matching the
+  original four mount shapes: `entity_slug + uuid`, `entity_id + id`,
+  `entity_slug` only, `entity_id` only) handle the
+  `Entities.get_entity_by_name/2` / `Entities.get_entity!/2` +
+  `EntityData.get!/2` loads, plus the presence init coupling
+  (`PresenceHelpers.track_editing_session/4`,
+  `Events.subscribe_to_entity_data/1`) via the renamed
+  `hydrate_data_form/6` and `hydrate_data_presence/5` helpers.
+
+The reviewer noted this refactor for `data_form` / `entity_form` "isn't
+a 1-line change" because of the presence/lock coupling. Confirmed —
+the rename + delegation shape preserves the `connected?(socket)`
+gating so presence still only initializes on the connected pass; the
+hydrate helpers don't change behavior, just where they run in the
+LiveView lifecycle.
+
+**Other review findings (not in this batch):**
+
+- *EntityFormController success test* — already closed in commit
+  `1c6f332` (boss strengthened the test to snapshot
+  `EntityData.list_by_entity/1` before/after).
+- *ActivityLog rescue branches unreachable* — reclassified as N/A in
+  the review itself; upstream's broad rescue catches first.
+- *EntityData cross-context `belongs_to`* — long-horizon, pre-existing,
+  outside PR-#9 scope.
+
+684 tests / 0 failures, 10/10 stable, `mix precommit` clean (compile
++ format + credo `1035 mods/funs no issues` + dialyzer 0 errors).
 
 ## Open
 
