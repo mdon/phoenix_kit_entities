@@ -41,8 +41,7 @@ defmodule PhoenixKitEntities.Web.EntityForm do
     entity = Entities.get_entity!(id)
     changeset = Entities.change_entity(entity)
 
-    {:ok, socket} = hydrate_entity_form(socket, entity, changeset, gettext("Edit Entity"))
-    {:noreply, socket}
+    {:noreply, hydrate_entity_form(socket, entity, changeset, gettext("Edit Entity"))}
   end
 
   def handle_params(_params, _uri, socket) do
@@ -50,8 +49,7 @@ defmodule PhoenixKitEntities.Web.EntityForm do
     entity = %Entities{}
     changeset = Entities.change_entity(entity)
 
-    {:ok, socket} = hydrate_entity_form(socket, entity, changeset, gettext("New Entity"))
-    {:noreply, socket}
+    {:noreply, hydrate_entity_form(socket, entity, changeset, gettext("New Entity"))}
   end
 
   defp hydrate_entity_form(socket, entity, _changeset, page_title) do
@@ -102,9 +100,7 @@ defmodule PhoenixKitEntities.Web.EntityForm do
       |> assign(:sort_mode, Entities.get_sort_mode(entity))
       |> mount_multilang()
 
-    socket = hydrate_entity_presence(socket, form_key, entity, current_user)
-
-    {:ok, socket}
+    hydrate_entity_presence(socket, form_key, entity, current_user)
   end
 
   defp hydrate_entity_presence(socket, form_key, entity, current_user) do

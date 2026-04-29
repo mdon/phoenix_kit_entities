@@ -42,10 +42,8 @@ defmodule PhoenixKitEntities.Web.DataForm do
     data_record = EntityData.get!(uuid, lang: locale)
     changeset = EntityData.change(data_record)
 
-    {:ok, socket} =
-      hydrate_data_form(socket, entity, data_record, changeset, gettext("Edit Data"), locale)
-
-    {:noreply, socket}
+    {:noreply,
+     hydrate_data_form(socket, entity, data_record, changeset, gettext("Edit Data"), locale)}
   end
 
   def handle_params(%{"entity_id" => entity_uuid, "id" => id} = params, _uri, socket) do
@@ -56,10 +54,8 @@ defmodule PhoenixKitEntities.Web.DataForm do
     data_record = EntityData.get!(id, lang: locale)
     changeset = EntityData.change(data_record)
 
-    {:ok, socket} =
-      hydrate_data_form(socket, entity, data_record, changeset, gettext("Edit Data"), locale)
-
-    {:noreply, socket}
+    {:noreply,
+     hydrate_data_form(socket, entity, data_record, changeset, gettext("Edit Data"), locale)}
   end
 
   def handle_params(%{"entity_slug" => entity_slug} = params, _uri, socket) do
@@ -70,10 +66,8 @@ defmodule PhoenixKitEntities.Web.DataForm do
     data_record = %EntityData{entity_uuid: entity.uuid}
     changeset = EntityData.change(data_record)
 
-    {:ok, socket} =
-      hydrate_data_form(socket, entity, data_record, changeset, gettext("New Data"), locale)
-
-    {:noreply, socket}
+    {:noreply,
+     hydrate_data_form(socket, entity, data_record, changeset, gettext("New Data"), locale)}
   end
 
   def handle_params(%{"entity_id" => entity_uuid} = params, _uri, socket) do
@@ -84,10 +78,8 @@ defmodule PhoenixKitEntities.Web.DataForm do
     data_record = %EntityData{entity_uuid: entity.uuid}
     changeset = EntityData.change(data_record)
 
-    {:ok, socket} =
-      hydrate_data_form(socket, entity, data_record, changeset, gettext("New Data"), locale)
-
-    {:noreply, socket}
+    {:noreply,
+     hydrate_data_form(socket, entity, data_record, changeset, gettext("New Data"), locale)}
   end
 
   defp hydrate_data_form(socket, entity, data_record, changeset, page_title, locale) do
@@ -140,9 +132,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
       |> assign(:has_unsaved_changes, false)
       |> mount_multilang()
 
-    socket = hydrate_data_presence(socket, entity, data_record, form_record_key, current_user)
-
-    {:ok, socket}
+    hydrate_data_presence(socket, entity, data_record, form_record_key, current_user)
   end
 
   defp hydrate_data_presence(socket, entity, data_record, form_record_key, current_user) do

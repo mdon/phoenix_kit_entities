@@ -44,6 +44,9 @@ defmodule PhoenixKitEntities.Web.EntitiesSettings do
     {:ok, socket}
   end
 
+  # Canonical "load admin dashboard" path. Runs once on initial connected
+  # mount; would also re-run on any future `push_patch/2` to this LV. Keep
+  # cheap-looking work out of here — every read below multiplies on patch.
   @impl true
   def handle_params(_params, _uri, socket) do
     project_title = Settings.get_project_title()
