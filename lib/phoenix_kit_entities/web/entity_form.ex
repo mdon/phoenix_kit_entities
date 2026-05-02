@@ -954,8 +954,24 @@ defmodule PhoenixKitEntities.Web.EntityForm do
     rescue
       e ->
         require Logger
-        Logger.error("Entity save failed: #{Exception.message(e)}")
+
+        Logger.error(
+          "Entity save failed: #{Exception.message(e)} " <>
+            "(entity_uuid=#{inspect(entity_uuid_for_log(socket))})"
+        )
+
         {:noreply, put_flash(socket, :error, gettext("Something went wrong. Please try again."))}
+    end
+  end
+
+  # Pulls the entity uuid off socket assigns for error-log context.
+  # Returns `nil` for the new-entity path (no uuid yet) so the log
+  # line still differentiates "save failed before insert" from "save
+  # failed updating <uuid>".
+  defp entity_uuid_for_log(socket) do
+    case socket.assigns[:entity] do
+      %{uuid: uuid} -> uuid
+      _ -> nil
     end
   end
 
@@ -1006,7 +1022,11 @@ defmodule PhoenixKitEntities.Web.EntityForm do
           {:noreply, socket}
         rescue
           e ->
-            Logger.error("Failed to apply remote entity form change: #{inspect(e)}")
+            Logger.error(
+              "Failed to apply remote entity form change: #{inspect(e)} " <>
+                "(entity_uuid=#{inspect(entity_uuid_for_log(socket))})"
+            )
+
             {:noreply, socket}
         end
     end

@@ -232,7 +232,10 @@ defmodule PhoenixKitEntities.Web.DataForm do
       require Logger
 
       Logger.error(
-        "Entity data validate failed: #{Exception.message(e)}\n#{Exception.format_stacktrace(__STACKTRACE__)}"
+        "Entity data validate failed: #{Exception.message(e)} " <>
+          "(entity_uuid=#{inspect(record_uuid_for_log(socket, :entity))} " <>
+          "data_record_uuid=#{inspect(record_uuid_for_log(socket, :data_record))})\n" <>
+          Exception.format_stacktrace(__STACKTRACE__)
       )
 
       {:noreply, put_flash(socket, :error, gettext("Validation error — your data is preserved."))}
@@ -249,10 +252,24 @@ defmodule PhoenixKitEntities.Web.DataForm do
       require Logger
 
       Logger.error(
-        "Entity data save failed: #{Exception.message(e)}\n#{Exception.format_stacktrace(__STACKTRACE__)}"
+        "Entity data save failed: #{Exception.message(e)} " <>
+          "(entity_uuid=#{inspect(record_uuid_for_log(socket, :entity))} " <>
+          "data_record_uuid=#{inspect(record_uuid_for_log(socket, :data_record))})\n" <>
+          Exception.format_stacktrace(__STACKTRACE__)
       )
 
       {:noreply, put_flash(socket, :error, gettext("Something went wrong. Please try again."))}
+  end
+
+  # Pulls the resource uuid off socket assigns for use in error log
+  # context. Returns `nil` when the assign is missing or the underlying
+  # struct hasn't been hydrated yet (e.g. an exception during the very
+  # first validate before the entity is loaded).
+  defp record_uuid_for_log(socket, key) do
+    case socket.assigns[key] do
+      %{uuid: uuid} -> uuid
+      _ -> nil
+    end
   end
 
   def handle_event("reset", _params, socket) do
