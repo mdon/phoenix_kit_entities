@@ -135,6 +135,25 @@ defmodule PhoenixKitEntities.Web.EntitiesLiveTest do
       # LV still alive — no MatchError crash.
       assert render(view) =~ ctx.published.display_name
     end
+
+    test "non-admin scope flashes Not authorized and leaves positions unchanged",
+         %{conn: conn} = ctx do
+      conn =
+        put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid, roles: [], permissions: []))
+
+      {:ok, view, _html} = live(conn, "/en/admin/entities")
+
+      prior_published = Entities.get_entity!(ctx.published.uuid).position
+      prior_archived = Entities.get_entity!(ctx.archived.uuid).position
+
+      render_hook(view, "reorder_entities", %{
+        "ordered_ids" => [ctx.archived.uuid, ctx.published.uuid]
+      })
+
+      assert render(view) =~ "Not authorized"
+      assert Entities.get_entity!(ctx.published.uuid).position == prior_published
+      assert Entities.get_entity!(ctx.archived.uuid).position == prior_archived
+    end
   end
 
   describe "handle_info catch-all" do

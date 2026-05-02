@@ -195,6 +195,19 @@ V108 for entities) that drives manual sort.
   drag and emits a `Logger.warning` so ops can see the implicit
   setting change.
 
+**Audit row shape** — every reorder path emits an `ActivityLog` row:
+
+| Field                  | Success                           | DB error                | Rejected (`:too_many_uuids`) |
+|------------------------|-----------------------------------|-------------------------|-------------------------------|
+| `action`               | `entity.reordered` / `entity_data.reordered` | same              | same                          |
+| `actor_uuid`           | from caller opts                  | same                    | same                          |
+| `resource_type`        | `entity` / `entity_data`         | same                    | same                          |
+| `resource_uuid`        | first uuid in list                | first uuid in list      | nil                           |
+| `metadata.count`       | n                                 | n                       | n                             |
+| `metadata.entity_uuid` | data path only                    | data path only          | data path only                |
+| `metadata.db_pending`  | absent                            | `true`                  | `true`                        |
+| `metadata.rejected`    | absent                            | absent                  | `"too_many_uuids"`            |
+
 ### Activity Logging Pattern
 
 Mutations log via `PhoenixKitEntities.ActivityLog.log/1`, which wraps

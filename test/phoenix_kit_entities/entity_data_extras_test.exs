@@ -211,6 +211,16 @@ defmodule PhoenixKitEntities.EntityDataExtrasTest do
       assert EntityData.get(ctx.alpha.uuid).position == 99
     end
 
+    test "bulk_update_positions/2 raises ArgumentError on non-binary scope" do
+      pairs = [{"00000000-0000-0000-0000-000000000000", 1}]
+
+      assert_raise ArgumentError,
+                   ~r/expected entity_uuid scope to be a binary UUID or nil/,
+                   fn ->
+                     EntityData.bulk_update_positions(pairs, entity_uuid: :not_a_binary)
+                   end
+    end
+
     test "move_to_position/2 with same position is a noop", ctx do
       {:ok, _} = EntityData.update_position(ctx.alpha, 5)
       reread = EntityData.get(ctx.alpha.uuid)

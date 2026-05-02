@@ -467,6 +467,13 @@ defmodule PhoenixKitEntities.EntityData do
   defp position_update_query(uuid, scope) when is_binary(scope),
     do: from(d in __MODULE__, where: d.uuid == ^uuid and d.entity_uuid == ^scope)
 
+  defp position_update_query(_uuid, scope),
+    do:
+      raise(
+        ArgumentError,
+        "expected entity_uuid scope to be a binary UUID or nil, got: #{inspect(scope)}"
+      )
+
   # Audit-log a reorder failure so the user-initiated action is
   # represented in the activity table even when the DB write rolls
   # back. `db_pending: true` lets consumers distinguish from

@@ -603,6 +603,9 @@ defmodule PhoenixKitEntities do
   # Auto-assign a position when the caller hasn't specified one — places
   # the new entity at the end of the manual-order list. Existing tests /
   # callers that pass `:position` keep control.
+  # Race-tolerant: two concurrent inserts can read the same MAX and both
+  # write n+1; ties resolve via the date_created secondary sort and
+  # clear on the next drag.
   defp maybe_add_entity_position(attrs) when is_map(attrs) do
     has_position =
       Map.has_key?(attrs, :position) or Map.has_key?(attrs, "position")

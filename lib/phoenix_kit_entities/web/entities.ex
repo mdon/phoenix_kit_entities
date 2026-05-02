@@ -10,6 +10,7 @@ defmodule PhoenixKitEntities.Web.Entities do
   require Logger
 
   alias PhoenixKit.Settings
+  alias PhoenixKit.Users.Auth.Scope
   alias PhoenixKitEntities, as: Entities
 
   @impl true
@@ -55,56 +56,72 @@ defmodule PhoenixKitEntities.Web.Entities do
   end
 
   def handle_event("archive_entity", %{"uuid" => uuid}, socket) do
-    locale = socket.assigns[:current_locale]
-    entity = Entities.get_entity!(uuid, lang: locale)
+    if Scope.admin?(socket.assigns.phoenix_kit_current_scope) do
+      locale = socket.assigns[:current_locale]
+      entity = Entities.get_entity!(uuid, lang: locale)
 
-    case Entities.update_entity(entity, %{status: "archived"}, actor_opts(socket)) do
-      {:ok, _entity} ->
-        socket =
-          socket
-          |> assign(:entities, Entities.list_entities(lang: locale))
-          |> put_flash(
-            :info,
-            gettext("Entity '%{name}' archived successfully", name: entity.display_name)
-          )
+      case Entities.update_entity(entity, %{status: "archived"}, actor_opts(socket)) do
+        {:ok, _entity} ->
+          socket =
+            socket
+            |> assign(:entities, Entities.list_entities(lang: locale))
+            |> put_flash(
+              :info,
+              gettext("Entity '%{name}' archived successfully", name: entity.display_name)
+            )
 
-        {:noreply, socket}
+          {:noreply, socket}
 
-      {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, gettext("Failed to archive entity"))}
+        {:error, _changeset} ->
+          {:noreply, put_flash(socket, :error, gettext("Failed to archive entity"))}
+      end
+    else
+      {:noreply, put_flash(socket, :error, gettext("Not authorized"))}
     end
   end
 
   def handle_event("restore_entity", %{"uuid" => uuid}, socket) do
-    locale = socket.assigns[:current_locale]
-    entity = Entities.get_entity!(uuid, lang: locale)
+    if Scope.admin?(socket.assigns.phoenix_kit_current_scope) do
+      locale = socket.assigns[:current_locale]
+      entity = Entities.get_entity!(uuid, lang: locale)
 
-    case Entities.update_entity(entity, %{status: "published"}, actor_opts(socket)) do
-      {:ok, _entity} ->
-        socket =
-          socket
-          |> assign(:entities, Entities.list_entities(lang: locale))
-          |> put_flash(
-            :info,
-            gettext("Entity '%{name}' restored successfully", name: entity.display_name)
-          )
+      case Entities.update_entity(entity, %{status: "published"}, actor_opts(socket)) do
+        {:ok, _entity} ->
+          socket =
+            socket
+            |> assign(:entities, Entities.list_entities(lang: locale))
+            |> put_flash(
+              :info,
+              gettext("Entity '%{name}' restored successfully", name: entity.display_name)
+            )
 
-        {:noreply, socket}
+          {:noreply, socket}
 
-      {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, gettext("Failed to restore entity"))}
+        {:error, _changeset} ->
+          {:noreply, put_flash(socket, :error, gettext("Failed to restore entity"))}
+      end
+    else
+      {:noreply, put_flash(socket, :error, gettext("Not authorized"))}
     end
   end
 
   def handle_event("reorder_entities", %{"ordered_ids" => ordered_ids}, socket)
       when is_list(ordered_ids) do
-    case Entities.reorder_entities(ordered_ids, actor_opts(socket)) do
-      :ok ->
-        {:noreply,
-         assign(socket, :entities, Entities.list_entities(lang: socket.assigns[:current_locale]))}
+    if Scope.admin?(socket.assigns.phoenix_kit_current_scope) do
+      case Entities.reorder_entities(ordered_ids, actor_opts(socket)) do
+        :ok ->
+          {:noreply,
+           assign(
+             socket,
+             :entities,
+             Entities.list_entities(lang: socket.assigns[:current_locale])
+           )}
 
-      {:error, _reason} ->
-        {:noreply, put_flash(socket, :error, gettext("Failed to save the new order"))}
+        {:error, _reason} ->
+          {:noreply, put_flash(socket, :error, gettext("Failed to save the new order"))}
+      end
+    else
+      {:noreply, put_flash(socket, :error, gettext("Not authorized"))}
     end
   end
 

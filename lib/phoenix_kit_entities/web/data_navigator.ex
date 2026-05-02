@@ -354,15 +354,30 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
   end
 
   defp apply_record_reorder(socket, ordered_ids) do
-    entity = ensure_manual_sort(socket.assigns.selected_entity)
+    {entity, sort_flipped?} = ensure_manual_sort(socket.assigns.selected_entity)
     entity_uuid = socket.assigns.selected_entity_uuid
 
     case EntityData.reorder(entity_uuid, ordered_ids, actor_opts(socket)) do
       :ok ->
-        {:noreply,
-         socket
-         |> assign(:selected_entity, entity)
-         |> apply_filters()}
+        socket =
+          socket
+          |> assign(:selected_entity, entity)
+          |> apply_filters()
+
+        socket =
+          if sort_flipped? == :failed do
+            put_flash(
+              socket,
+              :warning,
+              gettext(
+                "Positions saved, but sort mode could not be switched to manual — order may not survive a refresh."
+              )
+            )
+          else
+            socket
+          end
+
+        {:noreply, socket}
 
       _ ->
         {:noreply, put_flash(socket, :error, gettext("Failed to save the new order"))}
@@ -377,7 +392,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
   # context's notify hook.
   defp ensure_manual_sort(entity) do
     if Entities.manual_sort?(entity) do
-      entity
+      {entity, :already_manual}
     else
       case Entities.update_sort_mode(entity, "manual") do
         {:ok, updated} ->
@@ -385,10 +400,15 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
             "DataNavigator: entity #{entity.uuid} (#{entity.name}) auto-switched sort_mode to \"manual\" on first drag"
           )
 
-          updated
+          {updated, :flipped}
 
-        _ ->
-          entity
+        {:error, changeset} ->
+          Logger.error(
+            "DataNavigator: failed to auto-switch sort_mode to \"manual\" for " <>
+              "entity #{entity.uuid} (#{entity.name}): #{inspect(changeset.errors)}"
+          )
+
+          {entity, :failed}
       end
     end
   end
@@ -1332,294 +1352,165 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
               </tbody>
             </.table_default>
           <% else %>
-            <%!-- Card View --%>
-            <%= if @selected_entity do %>
-              <.draggable_list
-                id="data-records-cards"
-                items={@entity_data_records}
-                item_id={&(&1.uuid)}
-                on_reorder="reorder_records"
-                draggable={length(@entity_data_records) > 1}
-                layout={:list}
-                gap="gap-6"
-              >
-                <:item :let={data_record}>
-                  <div class="card bg-base-100 shadow-xl hover:shadow-2xl transition-shadow">
-                  <div class="card-body">
-                    <div class="flex items-start gap-3 mb-4">
-                      <div
-                        :if={length(@entity_data_records) > 1}
-                        class="cursor-grab active:cursor-grabbing text-base-content/30 hover:text-base-content/70 mt-1"
-                        title={gettext("Drag to reorder")}
-                      >
-                        <.icon name="hero-bars-3" class="w-5 h-5" />
-                      </div>
-                      <input
-                        type="checkbox"
-                        class="checkbox checkbox-md mt-1"
-                        phx-click="toggle_select"
-                        phx-value-uuid={data_record.uuid}
-                        checked={MapSet.member?(@selected_uuids, data_record.uuid)}
-                      />
-                      <div class="flex-1">
-                        <div class="flex items-start justify-between mb-2">
-                          <.link
-                            navigate={
-                              PhoenixKit.Utils.Routes.path(
-                                "/admin/entities/#{get_entity_slug(@entities, data_record.entity_uuid)}/data/#{data_record.uuid}"
-                              )
-                            }
-                            class="flex-1 hover:text-primary transition-colors cursor-pointer"
-                          >
-                            <%!-- Title and Entity Info --%>
-                            <div class="flex items-center mb-2">
-                              <h3 class="card-title text-lg mr-3">{data_record.title}</h3>
-                              <%= if !@selected_entity do %>
-                                <span class="badge badge-outline">
-                                  {get_entity_name(@entities, data_record.entity_uuid)}
-                                </span>
-                              <% end %>
-                            </div>
-
-                            <%!-- Slug --%>
-                            <%= if data_record.slug do %>
-                              <p class="text-sm text-base-content/60 mb-2">
-                                <.icon name="hero-link" class="w-4 h-4 inline mr-1" />
-                                {data_record.slug}
-                              </p>
-                            <% end %>
-
-                            <%!-- Data Preview --%>
-                            <%= if data_record.data && map_size(data_record.data) > 0 do %>
-                              <p class="text-sm text-base-content/70 mb-3">
-                                {format_data_preview(data_record.data)}
-                              </p>
-                            <% end %>
-                          </.link>
-
-                          <%!-- Status Badge --%>
-                          <div class="flex flex-col items-end">
-                            <span class={"badge #{status_badge_class(data_record.status)} mb-2"}>
-                              <.icon name={status_icon(data_record.status)} class="w-3 h-3 mr-1" />
-                              {status_label(data_record.status)}
-                            </span>
-
-                            <%!-- Status Toggle Button --%>
-                            <button
-                              class="btn btn-ghost btn-xs"
-                              phx-click="toggle_status"
-                              phx-value-uuid={data_record.uuid}
-                              title={gettext("Cycle status")}
-                            >
-                              <.icon name="hero-arrow-path" class="w-3 h-3" />
-                            </button>
-                          </div>
-                        </div>
-
-                        <%!-- Metadata Row --%>
-                        <div class="flex flex-wrap items-center gap-4 text-xs text-base-content/50 mb-4">
-                          <%= if data_record.creator do %>
-                            <span>
-                              <.icon name="hero-user" class="w-3 h-3 inline mr-1" />
-                              {data_record.creator.email}
-                            </span>
-                          <% end %>
-                          <span>
-                            <.icon name="hero-calendar" class="w-3 h-3 inline mr-1" />
-                            {gettext("Created")} {PhoenixKit.Utils.Date.format_date_with_user_format(
-                              data_record.date_created
-                            )}
-                          </span>
-                          <%= if data_record.date_updated != data_record.date_created do %>
-                            <span>
-                              <.icon name="hero-clock" class="w-3 h-3 inline mr-1" />
-                              {gettext("Updated")} {PhoenixKit.Utils.Date.format_date_with_user_format(
-                                data_record.date_updated
-                              )}
-                            </span>
-                          <% end %>
-                        </div>
-                      </div>
+            <%!-- Card View — single .draggable_list; DnD disabled when no entity is selected --%>
+            <.draggable_list
+              id="data-records-cards"
+              items={@entity_data_records}
+              item_id={&(&1.uuid)}
+              on_reorder="reorder_records"
+              draggable={not is_nil(@selected_entity) and length(@entity_data_records) > 1}
+              layout={:list}
+              gap="gap-6"
+            >
+              <:item :let={data_record}>
+                <div class="card bg-base-100 shadow-xl hover:shadow-2xl transition-shadow">
+                <div class="card-body">
+                  <div class="flex items-start gap-3 mb-4">
+                    <div
+                      :if={@selected_entity && length(@entity_data_records) > 1}
+                      class="cursor-grab active:cursor-grabbing text-base-content/30 hover:text-base-content/70 mt-1"
+                      title={gettext("Drag to reorder")}
+                    >
+                      <.icon name="hero-bars-3" class="w-5 h-5" />
                     </div>
-
-                    <%!-- Actions --%>
-                    <div class="card-actions justify-end">
-                      <.link
-                        navigate={
-                          PhoenixKit.Utils.Routes.path(
-                            "/admin/entities/#{get_entity_slug(@entities, data_record.entity_uuid)}/data/#{data_record.uuid}"
-                          )
-                        }
-                        class="btn btn-outline btn-sm"
-                      >
-                        <.icon name="hero-eye" class="w-4 h-4 mr-1" /> {gettext("View")}
-                      </.link>
-                      <.link
-                        navigate={
-                          PhoenixKit.Utils.Routes.path(
-                            "/admin/entities/#{get_entity_slug(@entities, data_record.entity_uuid)}/data/#{data_record.uuid}/edit"
-                          )
-                        }
-                        class="btn btn-primary btn-sm"
-                      >
-                        <.icon name="hero-pencil" class="w-4 h-4 mr-1" /> {gettext("Edit")}
-                      </.link>
-
-                      <%!-- Archive/Restore Button --%>
-                      <%= if data_record.status == "archived" do %>
-                        <button
-                          class="btn btn-success btn-sm"
-                          phx-click="restore_data"
-                          phx-value-uuid={data_record.uuid}
-                          phx-disable-with={gettext("…")}
-                          title={gettext("Restore data record")}
-                        >
-                          <.icon name="hero-arrow-path" class="w-4 h-4" />
-                        </button>
-                      <% else %>
-                        <button
-                          class="btn btn-error btn-sm"
-                          phx-click="archive_data"
-                          phx-value-uuid={data_record.uuid}
-                          phx-disable-with={gettext("…")}
-                          title={gettext("Archive data record")}
-                        >
-                          <.icon name="hero-trash" class="w-4 h-4" />
-                        </button>
-                      <% end %>
-                    </div>
-                  </div>
-                </div>
-              </:item>
-            </.draggable_list>
-            <% else %>
-              <div class="grid gap-6">
-                <%= for data_record <- @entity_data_records do %>
-                  <div class="card bg-base-100 shadow-xl hover:shadow-2xl transition-shadow">
-                    <div class="card-body">
-                      <div class="flex items-start gap-3 mb-4">
-                        <input
-                          type="checkbox"
-                          class="checkbox checkbox-md mt-1"
-                          phx-click="toggle_select"
-                          phx-value-uuid={data_record.uuid}
-                          checked={MapSet.member?(@selected_uuids, data_record.uuid)}
-                        />
-                        <div class="flex-1">
-                          <div class="flex items-start justify-between mb-2">
-                            <.link
-                              navigate={
-                                PhoenixKit.Utils.Routes.path(
-                                  "/admin/entities/#{get_entity_slug(@entities, data_record.entity_uuid)}/data/#{data_record.uuid}"
-                                )
-                              }
-                              class="flex-1 hover:text-primary transition-colors cursor-pointer"
-                            >
-                              <div class="flex items-center mb-2">
-                                <h3 class="card-title text-lg mr-3">{data_record.title}</h3>
-                                <span class="badge badge-outline">
-                                  {get_entity_name(@entities, data_record.entity_uuid)}
-                                </span>
-                              </div>
-                              <%= if data_record.slug do %>
-                                <p class="text-sm text-base-content/60 mb-2">
-                                  <.icon name="hero-link" class="w-4 h-4 inline mr-1" />
-                                  {data_record.slug}
-                                </p>
-                              <% end %>
-                              <%= if data_record.data && map_size(data_record.data) > 0 do %>
-                                <p class="text-sm text-base-content/70 mb-3">
-                                  {format_data_preview(data_record.data)}
-                                </p>
-                              <% end %>
-                            </.link>
-                            <div class="flex flex-col items-end">
-                              <span class={"badge #{status_badge_class(data_record.status)} mb-2"}>
-                                <.icon name={status_icon(data_record.status)} class="w-3 h-3 mr-1" />
-                                {status_label(data_record.status)}
-                              </span>
-                              <button
-                                class="btn btn-ghost btn-xs"
-                                phx-click="toggle_status"
-                                phx-value-uuid={data_record.uuid}
-                                title={gettext("Cycle status")}
-                              >
-                                <.icon name="hero-arrow-path" class="w-3 h-3" />
-                              </button>
-                            </div>
-                          </div>
-                          <div class="flex flex-wrap items-center gap-4 text-xs text-base-content/50 mb-4">
-                            <%= if data_record.creator do %>
-                              <span>
-                                <.icon name="hero-user" class="w-3 h-3 inline mr-1" />
-                                {data_record.creator.email}
-                              </span>
-                            <% end %>
-                            <span>
-                              <.icon name="hero-calendar" class="w-3 h-3 inline mr-1" />
-                              {gettext("Created")} {PhoenixKit.Utils.Date.format_date_with_user_format(
-                                data_record.date_created
-                              )}
-                            </span>
-                            <%= if data_record.date_updated != data_record.date_created do %>
-                              <span>
-                                <.icon name="hero-clock" class="w-3 h-3 inline mr-1" />
-                                {gettext("Updated")} {PhoenixKit.Utils.Date.format_date_with_user_format(
-                                  data_record.date_updated
-                                )}
-                              </span>
-                            <% end %>
-                          </div>
-                        </div>
-                      </div>
-                      <div class="card-actions justify-end">
+                    <input
+                      type="checkbox"
+                      class="checkbox checkbox-md mt-1"
+                      phx-click="toggle_select"
+                      phx-value-uuid={data_record.uuid}
+                      checked={MapSet.member?(@selected_uuids, data_record.uuid)}
+                    />
+                    <div class="flex-1">
+                      <div class="flex items-start justify-between mb-2">
                         <.link
                           navigate={
                             PhoenixKit.Utils.Routes.path(
                               "/admin/entities/#{get_entity_slug(@entities, data_record.entity_uuid)}/data/#{data_record.uuid}"
                             )
                           }
-                          class="btn btn-outline btn-sm"
+                          class="flex-1 hover:text-primary transition-colors cursor-pointer"
                         >
-                          <.icon name="hero-eye" class="w-4 h-4 mr-1" /> {gettext("View")}
+                          <%!-- Title and Entity Info --%>
+                          <div class="flex items-center mb-2">
+                            <h3 class="card-title text-lg mr-3">{data_record.title}</h3>
+                            <%= if !@selected_entity do %>
+                              <span class="badge badge-outline">
+                                {get_entity_name(@entities, data_record.entity_uuid)}
+                              </span>
+                            <% end %>
+                          </div>
+
+                          <%!-- Slug --%>
+                          <%= if data_record.slug do %>
+                            <p class="text-sm text-base-content/60 mb-2">
+                              <.icon name="hero-link" class="w-4 h-4 inline mr-1" />
+                              {data_record.slug}
+                            </p>
+                          <% end %>
+
+                          <%!-- Data Preview --%>
+                          <%= if data_record.data && map_size(data_record.data) > 0 do %>
+                            <p class="text-sm text-base-content/70 mb-3">
+                              {format_data_preview(data_record.data)}
+                            </p>
+                          <% end %>
                         </.link>
-                        <.link
-                          navigate={
-                            PhoenixKit.Utils.Routes.path(
-                              "/admin/entities/#{get_entity_slug(@entities, data_record.entity_uuid)}/data/#{data_record.uuid}/edit"
-                            )
-                          }
-                          class="btn btn-primary btn-sm"
-                        >
-                          <.icon name="hero-pencil" class="w-4 h-4 mr-1" /> {gettext("Edit")}
-                        </.link>
-                        <%= if data_record.status == "archived" do %>
+
+                        <%!-- Status Badge --%>
+                        <div class="flex flex-col items-end">
+                          <span class={"badge #{status_badge_class(data_record.status)} mb-2"}>
+                            <.icon name={status_icon(data_record.status)} class="w-3 h-3 mr-1" />
+                            {status_label(data_record.status)}
+                          </span>
+
+                          <%!-- Status Toggle Button --%>
                           <button
-                            class="btn btn-success btn-sm"
-                            phx-click="restore_data"
+                            class="btn btn-ghost btn-xs"
+                            phx-click="toggle_status"
                             phx-value-uuid={data_record.uuid}
-                            phx-disable-with={gettext("…")}
-                            title={gettext("Restore data record")}
+                            title={gettext("Cycle status")}
                           >
-                            <.icon name="hero-arrow-path" class="w-4 h-4" />
+                            <.icon name="hero-arrow-path" class="w-3 h-3" />
                           </button>
-                        <% else %>
-                          <button
-                            class="btn btn-error btn-sm"
-                            phx-click="archive_data"
-                            phx-value-uuid={data_record.uuid}
-                            phx-disable-with={gettext("…")}
-                            title={gettext("Archive data record")}
-                          >
-                            <.icon name="hero-trash" class="w-4 h-4" />
-                          </button>
+                        </div>
+                      </div>
+
+                      <%!-- Metadata Row --%>
+                      <div class="flex flex-wrap items-center gap-4 text-xs text-base-content/50 mb-4">
+                        <%= if data_record.creator do %>
+                          <span>
+                            <.icon name="hero-user" class="w-3 h-3 inline mr-1" />
+                            {data_record.creator.email}
+                          </span>
+                        <% end %>
+                        <span>
+                          <.icon name="hero-calendar" class="w-3 h-3 inline mr-1" />
+                          {gettext("Created")} {PhoenixKit.Utils.Date.format_date_with_user_format(
+                            data_record.date_created
+                          )}
+                        </span>
+                        <%= if data_record.date_updated != data_record.date_created do %>
+                          <span>
+                            <.icon name="hero-clock" class="w-3 h-3 inline mr-1" />
+                            {gettext("Updated")} {PhoenixKit.Utils.Date.format_date_with_user_format(
+                              data_record.date_updated
+                            )}
+                          </span>
                         <% end %>
                       </div>
                     </div>
                   </div>
-                <% end %>
+
+                  <%!-- Actions --%>
+                  <div class="card-actions justify-end">
+                    <.link
+                      navigate={
+                        PhoenixKit.Utils.Routes.path(
+                          "/admin/entities/#{get_entity_slug(@entities, data_record.entity_uuid)}/data/#{data_record.uuid}"
+                        )
+                      }
+                      class="btn btn-outline btn-sm"
+                    >
+                      <.icon name="hero-eye" class="w-4 h-4 mr-1" /> {gettext("View")}
+                    </.link>
+                    <.link
+                      navigate={
+                        PhoenixKit.Utils.Routes.path(
+                          "/admin/entities/#{get_entity_slug(@entities, data_record.entity_uuid)}/data/#{data_record.uuid}/edit"
+                        )
+                      }
+                      class="btn btn-primary btn-sm"
+                    >
+                      <.icon name="hero-pencil" class="w-4 h-4 mr-1" /> {gettext("Edit")}
+                    </.link>
+
+                    <%!-- Archive/Restore Button --%>
+                    <%= if data_record.status == "archived" do %>
+                      <button
+                        class="btn btn-success btn-sm"
+                        phx-click="restore_data"
+                        phx-value-uuid={data_record.uuid}
+                        phx-disable-with={gettext("…")}
+                        title={gettext("Restore data record")}
+                      >
+                        <.icon name="hero-arrow-path" class="w-4 h-4" />
+                      </button>
+                    <% else %>
+                      <button
+                        class="btn btn-error btn-sm"
+                        phx-click="archive_data"
+                        phx-value-uuid={data_record.uuid}
+                        phx-disable-with={gettext("…")}
+                        title={gettext("Archive data record")}
+                      >
+                        <.icon name="hero-trash" class="w-4 h-4" />
+                      </button>
+                    <% end %>
+                  </div>
+                </div>
               </div>
-            <% end %>
+            </:item>
+          </.draggable_list>
           <% end %>
         <% end %>
       </div>
