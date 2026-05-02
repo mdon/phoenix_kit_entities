@@ -96,6 +96,18 @@ defmodule PhoenixKitEntities.Web.Entities do
     end
   end
 
+  def handle_event("reorder_entities", %{"ordered_ids" => ordered_ids}, socket)
+      when is_list(ordered_ids) do
+    case Entities.reorder_entities(ordered_ids) do
+      :ok ->
+        {:noreply,
+         assign(socket, :entities, Entities.list_entities(lang: socket.assigns[:current_locale]))}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, gettext("Failed to save the new order"))}
+    end
+  end
+
   ## Live updates
 
   @impl true
@@ -213,6 +225,7 @@ defmodule PhoenixKitEntities.Web.Entities do
               <.table_default variant="zebra" size="sm">
                 <.table_default_header>
                   <.table_default_row>
+                    <.table_default_header_cell :if={length(@entities) > 1} class="w-8"></.table_default_header_cell>
                     <.table_default_header_cell>{gettext("Entity")}</.table_default_header_cell>
                     <.table_default_header_cell>{gettext("Status")}</.table_default_header_cell>
                     <.table_default_header_cell>{gettext("Fields")}</.table_default_header_cell>
@@ -220,9 +233,22 @@ defmodule PhoenixKitEntities.Web.Entities do
                     <.table_default_header_cell>{gettext("Actions")}</.table_default_header_cell>
                   </.table_default_row>
                 </.table_default_header>
-                <.table_default_body>
+                <tbody
+                  id="entities-table-body"
+                  data-sortable="true"
+                  data-sortable-event="reorder_entities"
+                  data-sortable-items=".sortable-item"
+                  data-sortable-hide-source="false"
+                  phx-hook="SortableGrid"
+                >
                   <%= for entity <- @entities do %>
-                    <.table_default_row>
+                    <.table_default_row class="sortable-item" data-id={entity.uuid}>
+                      <.table_default_cell
+                        :if={length(@entities) > 1}
+                        class="cursor-grab active:cursor-grabbing text-base-content/40"
+                      >
+                        <.icon name="hero-bars-3" class="w-4 h-4" />
+                      </.table_default_cell>
                       <.table_default_cell>
                         <.link
                           navigate={
@@ -324,16 +350,26 @@ defmodule PhoenixKitEntities.Web.Entities do
                       </.table_default_cell>
                     </.table_default_row>
                   <% end %>
-                </.table_default_body>
+                </tbody>
               </.table_default>
             </div>
           <% end %>
 
           <%!-- Card View: always shown on small screens, shown on md+ when card mode selected --%>
           <div class={if @view_mode == "table", do: "md:hidden", else: ""}>
-            <div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-              <%= for entity <- @entities do %>
-                <div class="card bg-base-100 shadow-xl hover:shadow-2xl transition-shadow">
+            <.draggable_list
+              id="entities-cards"
+              items={@entities}
+              item_id={&(&1.uuid)}
+              on_reorder="reorder_entities"
+              draggable={length(@entities) > 1}
+              layout={:grid}
+              cols={1}
+              gap="gap-6"
+              class="md:grid-cols-2 lg:grid-cols-3"
+            >
+              <:item :let={entity}>
+                <div class="card bg-base-100 shadow-xl hover:shadow-2xl transition-shadow h-full">
                   <div class="card-body">
                     <div class="flex items-start justify-between mb-4">
                       <.link
@@ -434,8 +470,8 @@ defmodule PhoenixKitEntities.Web.Entities do
                     </div>
                   </div>
                 </div>
-              <% end %>
-            </div>
+              </:item>
+            </.draggable_list>
           </div>
         <% end %>
       </div>
