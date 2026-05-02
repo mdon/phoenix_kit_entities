@@ -377,6 +377,61 @@ defmodule PhoenixKitEntities.Web.DataNavigatorLiveTest do
     end
   end
 
+  describe "reorder_records (drag-and-drop)" do
+    test "reorders records and refreshes the list",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, navigator_url(ctx.entity))
+
+      [r1, r2, r3] = ctx.records
+      ordered = [r3.uuid, r1.uuid, r2.uuid]
+
+      render_hook(view, "reorder_records", %{"ordered_ids" => ordered})
+
+      assert EntityData.get(r3.uuid).position == 1
+      assert EntityData.get(r1.uuid).position == 2
+      assert EntityData.get(r2.uuid).position == 3
+    end
+
+    test "first drag implicitly switches sort_mode to manual + logs warning",
+         %{conn: conn} = ctx do
+      # Entity starts with default sort_mode = "auto"
+      assert Entities.get_sort_mode(ctx.entity) == "auto"
+
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, navigator_url(ctx.entity))
+
+      previous = Logger.level()
+      Logger.configure(level: :warning)
+      on_exit(fn -> Logger.configure(level: previous) end)
+
+      [r1, r2, _r3] = ctx.records
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+          render_hook(view, "reorder_records", %{"ordered_ids" => [r2.uuid, r1.uuid]})
+        end)
+
+      # The flip is persisted on the entity row.
+      reread = Entities.get_entity!(ctx.entity.uuid)
+      assert Entities.get_sort_mode(reread) == "manual"
+
+      assert log =~ "auto-switched sort_mode to \"manual\""
+    end
+
+    test "malformed payload (no ordered_ids) flashes error without crashing",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, navigator_url(ctx.entity))
+
+      render_hook(view, "reorder_records", %{"unexpected" => "shape"})
+
+      assert render(view) =~ "Failed to save the new order"
+      # LV still alive.
+      assert render(view) =~ "Record 1"
+    end
+  end
+
   defp navigator_url(entity, opts \\ []) do
     base = "/en/admin/entities/#{entity.name}/data"
 

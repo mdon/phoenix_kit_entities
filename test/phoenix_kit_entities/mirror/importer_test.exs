@@ -32,7 +32,7 @@ defmodule PhoenixKitEntities.Mirror.ImporterTest do
       Repo.query(
         "INSERT INTO phoenix_kit_users (uuid, email, hashed_password, is_active, account_type, inserted_at, updated_at) " <>
           "VALUES ($1::uuid, $2, $3, true, 'person', NOW(), NOW()) ON CONFLICT (uuid) DO NOTHING",
-        [Ecto.UUID.dump!(user_uuid), "importer-test@example.com", "$2b$12$placeholder"]
+        [Ecto.UUID.dump!(user_uuid), "importer-test@example.com", valid_test_password_hash()]
       )
 
     {:ok, user_uuid: user_uuid}

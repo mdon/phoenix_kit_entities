@@ -330,6 +330,69 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
     end
   end
 
+  def handle_event("reorder_records", %{"ordered_ids" => ordered_ids}, socket)
+      when is_list(ordered_ids) do
+    cond do
+      not Scope.admin?(socket.assigns.phoenix_kit_current_scope) ->
+        {:noreply, put_flash(socket, :error, gettext("Not authorized"))}
+
+      is_nil(socket.assigns.selected_entity) or is_nil(socket.assigns.selected_entity_uuid) ->
+        {:noreply, socket}
+
+      true ->
+        apply_record_reorder(socket, ordered_ids)
+    end
+  end
+
+  # Catch-all for malformed reorder_records payloads (missing
+  # ordered_ids key, wrong type). Defensive — the SortableGrid hook
+  # always produces a list under the right key, but a stale browser
+  # tab or a custom client could trip this. Flash + no-op rather than
+  # crash the LV socket.
+  def handle_event("reorder_records", _params, socket) do
+    {:noreply, put_flash(socket, :error, gettext("Failed to save the new order"))}
+  end
+
+  defp apply_record_reorder(socket, ordered_ids) do
+    entity = ensure_manual_sort(socket.assigns.selected_entity)
+    entity_uuid = socket.assigns.selected_entity_uuid
+
+    case EntityData.reorder(entity_uuid, ordered_ids, actor_opts(socket)) do
+      :ok ->
+        {:noreply,
+         socket
+         |> assign(:selected_entity, entity)
+         |> apply_filters()}
+
+      _ ->
+        {:noreply, put_flash(socket, :error, gettext("Failed to save the new order"))}
+    end
+  end
+
+  # First drag implicitly switches the entity to manual sort — otherwise
+  # the visible order would snap back to date-created on the next refresh
+  # and the user would see their drag undone. Logs a warning so admins
+  # can see the silent setting flip in the application log; the flip
+  # itself also lands as an `entity.updated` activity row via the
+  # context's notify hook.
+  defp ensure_manual_sort(entity) do
+    if Entities.manual_sort?(entity) do
+      entity
+    else
+      case Entities.update_sort_mode(entity, "manual") do
+        {:ok, updated} ->
+          Logger.warning(
+            "DataNavigator: entity #{entity.uuid} (#{entity.name}) auto-switched sort_mode to \"manual\" on first drag"
+          )
+
+          updated
+
+        _ ->
+          entity
+      end
+    end
+  end
+
   def handle_event("toggle_select", %{"uuid" => uuid}, socket) do
     selected = socket.assigns.selected_uuids
 
@@ -1113,6 +1176,10 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
             <.table_default variant="zebra" size="sm">
               <.table_default_header>
                 <.table_default_row>
+                  <.table_default_header_cell
+                    :if={@selected_entity && length(@entity_data_records) > 1}
+                    class="w-8"
+                  ></.table_default_header_cell>
                   <.table_default_header_cell class="w-12">
                     <%= if length(@entity_data_records) > 0 do %>
                       <input
@@ -1140,9 +1207,25 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                   <.table_default_header_cell>{gettext("Actions")}</.table_default_header_cell>
                 </.table_default_row>
               </.table_default_header>
-              <.table_default_body>
+              <tbody
+                id={if @selected_entity, do: "data-records-tbody"}
+                data-sortable="true"
+                data-sortable-event="reorder_records"
+                data-sortable-items=".sortable-item"
+                data-sortable-hide-source="false"
+                phx-hook={if @selected_entity, do: "SortableGrid"}
+              >
                 <%= for data_record <- @entity_data_records do %>
-                  <.table_default_row>
+                  <.table_default_row
+                    class={if @selected_entity, do: "sortable-item"}
+                    data-id={data_record.uuid}
+                  >
+                    <.table_default_cell
+                      :if={@selected_entity && length(@entity_data_records) > 1}
+                      class="cursor-grab active:cursor-grabbing text-base-content/40"
+                    >
+                      <.icon name="hero-bars-3" class="w-4 h-4" />
+                    </.table_default_cell>
                     <.table_default_cell>
                       <input
                         type="checkbox"
@@ -1246,15 +1329,31 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                     </.table_default_cell>
                   </.table_default_row>
                 <% end %>
-              </.table_default_body>
+              </tbody>
             </.table_default>
           <% else %>
             <%!-- Card View --%>
-            <div class="grid gap-6">
-              <%= for data_record <- @entity_data_records do %>
-                <div class="card bg-base-100 shadow-xl hover:shadow-2xl transition-shadow">
+            <%= if @selected_entity do %>
+              <.draggable_list
+                id="data-records-cards"
+                items={@entity_data_records}
+                item_id={&(&1.uuid)}
+                on_reorder="reorder_records"
+                draggable={length(@entity_data_records) > 1}
+                layout={:list}
+                gap="gap-6"
+              >
+                <:item :let={data_record}>
+                  <div class="card bg-base-100 shadow-xl hover:shadow-2xl transition-shadow">
                   <div class="card-body">
                     <div class="flex items-start gap-3 mb-4">
+                      <div
+                        :if={length(@entity_data_records) > 1}
+                        class="cursor-grab active:cursor-grabbing text-base-content/30 hover:text-base-content/70 mt-1"
+                        title={gettext("Drag to reorder")}
+                      >
+                        <.icon name="hero-bars-3" class="w-5 h-5" />
+                      </div>
                       <input
                         type="checkbox"
                         class="checkbox checkbox-md mt-1"
@@ -1391,8 +1490,136 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                     </div>
                   </div>
                 </div>
-              <% end %>
-            </div>
+              </:item>
+            </.draggable_list>
+            <% else %>
+              <div class="grid gap-6">
+                <%= for data_record <- @entity_data_records do %>
+                  <div class="card bg-base-100 shadow-xl hover:shadow-2xl transition-shadow">
+                    <div class="card-body">
+                      <div class="flex items-start gap-3 mb-4">
+                        <input
+                          type="checkbox"
+                          class="checkbox checkbox-md mt-1"
+                          phx-click="toggle_select"
+                          phx-value-uuid={data_record.uuid}
+                          checked={MapSet.member?(@selected_uuids, data_record.uuid)}
+                        />
+                        <div class="flex-1">
+                          <div class="flex items-start justify-between mb-2">
+                            <.link
+                              navigate={
+                                PhoenixKit.Utils.Routes.path(
+                                  "/admin/entities/#{get_entity_slug(@entities, data_record.entity_uuid)}/data/#{data_record.uuid}"
+                                )
+                              }
+                              class="flex-1 hover:text-primary transition-colors cursor-pointer"
+                            >
+                              <div class="flex items-center mb-2">
+                                <h3 class="card-title text-lg mr-3">{data_record.title}</h3>
+                                <span class="badge badge-outline">
+                                  {get_entity_name(@entities, data_record.entity_uuid)}
+                                </span>
+                              </div>
+                              <%= if data_record.slug do %>
+                                <p class="text-sm text-base-content/60 mb-2">
+                                  <.icon name="hero-link" class="w-4 h-4 inline mr-1" />
+                                  {data_record.slug}
+                                </p>
+                              <% end %>
+                              <%= if data_record.data && map_size(data_record.data) > 0 do %>
+                                <p class="text-sm text-base-content/70 mb-3">
+                                  {format_data_preview(data_record.data)}
+                                </p>
+                              <% end %>
+                            </.link>
+                            <div class="flex flex-col items-end">
+                              <span class={"badge #{status_badge_class(data_record.status)} mb-2"}>
+                                <.icon name={status_icon(data_record.status)} class="w-3 h-3 mr-1" />
+                                {status_label(data_record.status)}
+                              </span>
+                              <button
+                                class="btn btn-ghost btn-xs"
+                                phx-click="toggle_status"
+                                phx-value-uuid={data_record.uuid}
+                                title={gettext("Cycle status")}
+                              >
+                                <.icon name="hero-arrow-path" class="w-3 h-3" />
+                              </button>
+                            </div>
+                          </div>
+                          <div class="flex flex-wrap items-center gap-4 text-xs text-base-content/50 mb-4">
+                            <%= if data_record.creator do %>
+                              <span>
+                                <.icon name="hero-user" class="w-3 h-3 inline mr-1" />
+                                {data_record.creator.email}
+                              </span>
+                            <% end %>
+                            <span>
+                              <.icon name="hero-calendar" class="w-3 h-3 inline mr-1" />
+                              {gettext("Created")} {PhoenixKit.Utils.Date.format_date_with_user_format(
+                                data_record.date_created
+                              )}
+                            </span>
+                            <%= if data_record.date_updated != data_record.date_created do %>
+                              <span>
+                                <.icon name="hero-clock" class="w-3 h-3 inline mr-1" />
+                                {gettext("Updated")} {PhoenixKit.Utils.Date.format_date_with_user_format(
+                                  data_record.date_updated
+                                )}
+                              </span>
+                            <% end %>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="card-actions justify-end">
+                        <.link
+                          navigate={
+                            PhoenixKit.Utils.Routes.path(
+                              "/admin/entities/#{get_entity_slug(@entities, data_record.entity_uuid)}/data/#{data_record.uuid}"
+                            )
+                          }
+                          class="btn btn-outline btn-sm"
+                        >
+                          <.icon name="hero-eye" class="w-4 h-4 mr-1" /> {gettext("View")}
+                        </.link>
+                        <.link
+                          navigate={
+                            PhoenixKit.Utils.Routes.path(
+                              "/admin/entities/#{get_entity_slug(@entities, data_record.entity_uuid)}/data/#{data_record.uuid}/edit"
+                            )
+                          }
+                          class="btn btn-primary btn-sm"
+                        >
+                          <.icon name="hero-pencil" class="w-4 h-4 mr-1" /> {gettext("Edit")}
+                        </.link>
+                        <%= if data_record.status == "archived" do %>
+                          <button
+                            class="btn btn-success btn-sm"
+                            phx-click="restore_data"
+                            phx-value-uuid={data_record.uuid}
+                            phx-disable-with={gettext("…")}
+                            title={gettext("Restore data record")}
+                          >
+                            <.icon name="hero-arrow-path" class="w-4 h-4" />
+                          </button>
+                        <% else %>
+                          <button
+                            class="btn btn-error btn-sm"
+                            phx-click="archive_data"
+                            phx-value-uuid={data_record.uuid}
+                            phx-disable-with={gettext("…")}
+                            title={gettext("Archive data record")}
+                          >
+                            <.icon name="hero-trash" class="w-4 h-4" />
+                          </button>
+                        <% end %>
+                      </div>
+                    </div>
+                  </div>
+                <% end %>
+              </div>
+            <% end %>
           <% end %>
         <% end %>
       </div>

@@ -457,6 +457,56 @@ defmodule PhoenixKitEntities.EntityData do
   end
 
   # Broadcast a reorder event for an entity so live views refresh.
+  # Builds the WHERE clause for `bulk_update_positions/2`. When a
+  # scope uuid is supplied, the entity_uuid filter prevents a stray
+  # cross-entity uuid in the input list from rewriting positions in
+  # the wrong scope.
+  defp position_update_query(uuid, nil),
+    do: from(d in __MODULE__, where: d.uuid == ^uuid)
+
+  defp position_update_query(uuid, scope) when is_binary(scope),
+    do: from(d in __MODULE__, where: d.uuid == ^uuid and d.entity_uuid == ^scope)
+
+  # Audit-log a reorder failure so the user-initiated action is
+  # represented in the activity table even when the DB write rolls
+  # back. `db_pending: true` lets consumers distinguish from
+  # successful rows.
+  defp log_data_reorder_error(uuid_position_pairs, entity_uuid_scope, _reason, opts) do
+    PhoenixKitEntities.ActivityLog.log(%{
+      action: "entity_data.reordered",
+      mode: "manual",
+      actor_uuid: Keyword.get(opts, :actor_uuid),
+      resource_type: "entity_data",
+      resource_uuid: first_uuid_from_pairs(uuid_position_pairs),
+      metadata: %{
+        "entity_uuid" => entity_uuid_scope,
+        "count" => length(uuid_position_pairs),
+        "db_pending" => true
+      }
+    })
+  end
+
+  # Audit-log an early-rejection (oversized payload). Same shape as
+  # the error path; flagged with `rejected:` so audit consumers can
+  # tell rejection apart from a DB failure.
+  defp log_data_reorder_rejected(reason, count, opts) do
+    PhoenixKitEntities.ActivityLog.log(%{
+      action: "entity_data.reordered",
+      mode: "manual",
+      actor_uuid: Keyword.get(opts, :actor_uuid),
+      resource_type: "entity_data",
+      metadata: %{
+        "entity_uuid" => Keyword.get(opts, :entity_uuid),
+        "count" => count,
+        "db_pending" => true,
+        "rejected" => to_string(reason)
+      }
+    })
+  end
+
+  defp first_uuid_from_pairs([{uuid, _} | _]) when is_binary(uuid), do: uuid
+  defp first_uuid_from_pairs(_), do: nil
+
   defp notify_reorder_event(entity_uuid) when is_binary(entity_uuid) do
     Events.broadcast_data_reordered(entity_uuid)
   end
@@ -751,25 +801,65 @@ defmodule PhoenixKitEntities.EntityData do
     __MODULE__.update(entity_data, %{position: position})
   end
 
+  # Cap on the number of UUIDs accepted by a single reorder/bulk
+  # call. Reorder is a per-page operation; even the largest realistic
+  # entity won't have 1000 records visible at once. Beyond this we'd
+  # expect an explicit batched API instead of an unbounded transaction.
+  @reorder_max_uuids 1000
+
   @doc """
   Bulk updates positions for multiple records.
 
   Accepts a list of `{uuid, position}` tuples. Each record is updated
   individually to trigger events and maintain consistency.
 
+  ## Options
+
+    * `:entity_uuid` — when provided, the WHERE clause also filters on
+      `entity_uuid`, so a stray UUID from another entity in the input
+      list cannot have its position rewritten by the wrong scope. The
+      LV reorder paths always pass this; programmatic callers should
+      too unless they really intend cross-entity rewrites.
+
+  Returns `{:error, :too_many_uuids}` if more than `#{1000}` pairs are
+  supplied — the cap protects the transaction from N+1 unbounded
+  `update_all` work and from a malformed LV payload turning into a
+  long-running write storm.
+
   ## Examples
 
-      iex> bulk_update_positions([{"uuid1", 1}, {"uuid2", 2}, {"uuid3", 3}])
+      iex> bulk_update_positions([{"uuid1", 1}, {"uuid2", 2}, {"uuid3", 3}], entity_uuid: e_uuid)
       :ok
   """
   def bulk_update_positions(uuid_position_pairs, opts \\ [])
+
+  def bulk_update_positions(uuid_position_pairs, opts)
+      when is_list(uuid_position_pairs) and length(uuid_position_pairs) > @reorder_max_uuids do
+    log_data_reorder_rejected(:too_many_uuids, length(uuid_position_pairs), opts)
+    {:error, :too_many_uuids}
+  end
+
+  def bulk_update_positions(uuid_position_pairs, opts)
       when is_list(uuid_position_pairs) do
+    entity_uuid_scope = Keyword.get(opts, :entity_uuid)
+
+    # Dedup defensively — a stale DOM may send the same UUID twice
+    # (e.g. a quick double-drop). We keep the *last* occurrence so the
+    # most recent intended position wins; same outcome the DB would
+    # produce, just without the wasted writes.
+    pairs =
+      uuid_position_pairs
+      |> Enum.reverse()
+      |> Enum.uniq_by(fn {uuid, _} -> uuid end)
+      |> Enum.reverse()
+
     result =
       repo().transaction(fn ->
         now = UtilsDate.utc_now()
 
-        Enum.each(uuid_position_pairs, fn {uuid, position} ->
-          from(d in __MODULE__, where: d.uuid == ^uuid)
+        Enum.each(pairs, fn {uuid, position} ->
+          uuid
+          |> position_update_query(entity_uuid_scope)
           |> repo().update_all(set: [position: position, date_updated: now])
         end)
       end)
@@ -777,12 +867,14 @@ defmodule PhoenixKitEntities.EntityData do
     case result do
       {:ok, _} ->
         entity_uuid =
-          Keyword.get(opts, :entity_uuid) || resolve_entity_uuid_from_pairs(uuid_position_pairs)
+          entity_uuid_scope || resolve_entity_uuid_from_pairs(uuid_position_pairs)
 
         notify_reorder_event(entity_uuid)
         :ok
 
       {:error, reason} ->
+        # Cover the user-initiated action even when the DB write fails.
+        log_data_reorder_error(uuid_position_pairs, entity_uuid_scope, reason, opts)
         {:error, reason}
     end
   end
@@ -878,14 +970,14 @@ defmodule PhoenixKitEntities.EntityData do
       iex> reorder(entity_uuid, ["uuid3", "uuid1", "uuid2"])
       :ok
   """
-  def reorder(entity_uuid, ordered_uuids)
+  def reorder(entity_uuid, ordered_uuids, opts \\ [])
       when is_binary(entity_uuid) and is_list(ordered_uuids) do
     pairs =
       ordered_uuids
       |> Enum.with_index(1)
       |> Enum.map(fn {uuid, pos} -> {uuid, pos} end)
 
-    bulk_update_positions(pairs, entity_uuid: entity_uuid)
+    bulk_update_positions(pairs, Keyword.put(opts, :entity_uuid, entity_uuid))
   end
 
   @doc """

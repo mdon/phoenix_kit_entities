@@ -118,6 +118,7 @@ defmodule PhoenixKitEntities do
              :status,
              :fields_definition,
              :settings,
+             :position,
              :date_created,
              :date_updated
            ]}
@@ -131,6 +132,7 @@ defmodule PhoenixKitEntities do
     field(:status, :string, default: "published")
     field(:fields_definition, {:array, :map})
     field(:settings, :map)
+    field(:position, :integer, default: 0)
     field(:created_by_uuid, UUIDv7)
     field(:date_created, :utc_datetime)
     field(:date_updated, :utc_datetime)
@@ -165,6 +167,7 @@ defmodule PhoenixKitEntities do
       :status,
       :fields_definition,
       :settings,
+      :position,
       :created_by_uuid,
       :date_created,
       :date_updated
@@ -378,7 +381,7 @@ defmodule PhoenixKitEntities do
   @spec list_entities(keyword()) :: [t()]
   def list_entities(opts \\ []) do
     __MODULE__
-    |> order_by([e], desc: e.date_created)
+    |> order_by([e], asc: e.position, desc: e.date_created)
     |> preload([:creator])
     |> repo().all()
     |> maybe_resolve_langs(opts)
@@ -395,7 +398,7 @@ defmodule PhoenixKitEntities do
   def list_active_entities(opts \\ []) do
     from(e in __MODULE__,
       where: e.status == "published",
-      order_by: [desc: e.date_created],
+      order_by: [asc: e.position, desc: e.date_created],
       preload: [:creator]
     )
     |> repo().all()
@@ -413,7 +416,7 @@ defmodule PhoenixKitEntities do
     summaries =
       from(e in __MODULE__,
         where: e.status == "published",
-        order_by: [desc: e.date_created],
+        order_by: [asc: e.position, desc: e.date_created],
         select: %{
           name: e.name,
           display_name: e.display_name,
@@ -586,12 +589,29 @@ defmodule PhoenixKitEntities do
   """
   @spec create_entity(map(), keyword()) :: {:ok, t()} | {:error, Ecto.Changeset.t()}
   def create_entity(attrs \\ %{}, opts \\ []) do
-    attrs = maybe_add_created_by(attrs)
+    attrs =
+      attrs
+      |> maybe_add_created_by()
+      |> maybe_add_entity_position()
 
     %__MODULE__{}
     |> changeset(attrs)
     |> repo().insert()
     |> notify_entity_event(:created, opts)
+  end
+
+  # Auto-assign a position when the caller hasn't specified one — places
+  # the new entity at the end of the manual-order list. Existing tests /
+  # callers that pass `:position` keep control.
+  defp maybe_add_entity_position(attrs) when is_map(attrs) do
+    has_position =
+      Map.has_key?(attrs, :position) or Map.has_key?(attrs, "position")
+
+    if has_position do
+      attrs
+    else
+      Map.put(attrs, :position, next_entity_position())
+    end
   end
 
   # Auto-fill created_by_uuid with first admin if not provided
@@ -657,6 +677,146 @@ defmodule PhoenixKitEntities do
   @spec change_entity(t(), map()) :: Ecto.Changeset.t()
   def change_entity(%__MODULE__{} = entity, attrs \\ %{}) do
     changeset(entity, attrs)
+  end
+
+  @doc """
+  Returns the next available `position` for a new entity — i.e. one
+  past the highest currently used. Falls back to `1` when the table is
+  empty.
+  """
+  @spec next_entity_position() :: integer()
+  def next_entity_position do
+    max =
+      __MODULE__
+      |> select([e], max(e.position))
+      |> repo().one()
+
+    case max do
+      nil -> 1
+      n when is_integer(n) -> n + 1
+    end
+  end
+
+  @doc """
+  Re-indexes the supplied list of entity UUIDs into positions `1..N`
+  in the order given.
+
+  This is the entry point for the drag-and-drop reorder event from the
+  Entities admin LV. UUIDs not in the list are left at their current
+  positions; missing UUIDs in the table are silently skipped (the LV
+  always sends the full visible list, so partial sends are a stale-DOM
+  artifact and not worth blowing up over).
+
+  Wraps both passes in a single transaction. Returns `:ok` on success
+  or `{:error, reason}` on transaction failure.
+  """
+  # Same cap as `EntityData.bulk_update_positions/2`. Reorder is a
+  # per-page action; even a workspace with hundreds of entities would
+  # never paint a thousand at once.
+  @reorder_entities_max_uuids 1000
+
+  @spec reorder_entities([Ecto.UUID.t()], keyword()) :: :ok | {:error, term()}
+  def reorder_entities(ordered_uuids, opts \\ [])
+
+  def reorder_entities(ordered_uuids, opts)
+      when is_list(ordered_uuids) and length(ordered_uuids) > @reorder_entities_max_uuids do
+    log_entity_reorder_rejected(:too_many_uuids, length(ordered_uuids), opts)
+    {:error, :too_many_uuids}
+  end
+
+  def reorder_entities(ordered_uuids, opts) when is_list(ordered_uuids) do
+    # Dedup defensively (last occurrence wins, same shape as
+    # `EntityData.bulk_update_positions/2`).
+    unique_uuids =
+      ordered_uuids
+      |> Enum.reverse()
+      |> Enum.uniq()
+      |> Enum.reverse()
+
+    case write_entity_positions(unique_uuids) do
+      {:ok, _} ->
+        # Audit-log the reorder. Metadata stays PII-safe — count + the
+        # first uuid are enough to attribute the action and locate it
+        # in the table; the full ordered list would bloat the row and
+        # add no diagnostic value beyond what `Entities.list_entities/0`
+        # at the same instant already shows.
+        log_entity_reorder_activity(unique_uuids, opts)
+
+        # Reuse the existing `:entity_updated` event — it's already
+        # wired to invalidate the Dashboard sidebar cache and refresh
+        # any open Entities/EntitiesSettings/DataNavigator LVs that
+        # render entity-keyed lists. Broadcasting once with the first
+        # uuid is sufficient since every listener re-fetches the full
+        # list on receipt.
+        broadcast_first_entity_updated(unique_uuids)
+
+        :ok
+
+      {:error, reason} ->
+        # Cover the user-initiated action even when the DB write fails.
+        # `db_pending: true` lets log consumers distinguish from
+        # successful rows; the actor still gets attribution in the
+        # audit trail.
+        log_entity_reorder_activity_error(unique_uuids, reason, opts)
+        {:error, reason}
+    end
+  end
+
+  defp write_entity_positions(unique_uuids) do
+    pairs = Enum.with_index(unique_uuids, 1)
+    now = UtilsDate.utc_now()
+
+    repo().transaction(fn ->
+      Enum.each(pairs, fn {uuid, idx} ->
+        from(e in __MODULE__, where: e.uuid == ^uuid)
+        |> repo().update_all(set: [position: idx, date_updated: now])
+      end)
+    end)
+  end
+
+  defp broadcast_first_entity_updated([uuid | _]) when is_binary(uuid),
+    do: Events.broadcast_entity_updated(uuid)
+
+  defp broadcast_first_entity_updated(_), do: :ok
+
+  defp log_entity_reorder_activity([], _opts), do: :ok
+
+  defp log_entity_reorder_activity([first_uuid | _rest] = uuids, opts) do
+    PhoenixKitEntities.ActivityLog.log(%{
+      action: "entity.reordered",
+      mode: "manual",
+      actor_uuid: Keyword.get(opts, :actor_uuid),
+      resource_type: "entity",
+      resource_uuid: first_uuid,
+      metadata: %{"count" => length(uuids)}
+    })
+  end
+
+  defp log_entity_reorder_activity_error([], _reason, _opts), do: :ok
+
+  defp log_entity_reorder_activity_error([first_uuid | _rest] = uuids, _reason, opts) do
+    PhoenixKitEntities.ActivityLog.log(%{
+      action: "entity.reordered",
+      mode: "manual",
+      actor_uuid: Keyword.get(opts, :actor_uuid),
+      resource_type: "entity",
+      resource_uuid: first_uuid,
+      metadata: %{"count" => length(uuids), "db_pending" => true}
+    })
+  end
+
+  defp log_entity_reorder_rejected(reason, count, opts) do
+    PhoenixKitEntities.ActivityLog.log(%{
+      action: "entity.reordered",
+      mode: "manual",
+      actor_uuid: Keyword.get(opts, :actor_uuid),
+      resource_type: "entity",
+      metadata: %{
+        "count" => count,
+        "db_pending" => true,
+        "rejected" => to_string(reason)
+      }
+    })
   end
 
   @doc """
