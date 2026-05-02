@@ -718,8 +718,9 @@ defmodule PhoenixKitEntities do
   @spec reorder_entities([Ecto.UUID.t()], keyword()) :: :ok | {:error, term()}
   def reorder_entities(ordered_uuids, opts \\ [])
 
-  def reorder_entities(ordered_uuids, _opts)
+  def reorder_entities(ordered_uuids, opts)
       when is_list(ordered_uuids) and length(ordered_uuids) > @reorder_entities_max_uuids do
+    log_entity_reorder_rejected(:too_many_uuids, length(ordered_uuids), opts)
     {:error, :too_many_uuids}
   end
 
@@ -752,6 +753,11 @@ defmodule PhoenixKitEntities do
         :ok
 
       {:error, reason} ->
+        # Cover the user-initiated action even when the DB write fails.
+        # `db_pending: true` lets log consumers distinguish from
+        # successful rows; the actor still gets attribution in the
+        # audit trail.
+        log_entity_reorder_activity_error(unique_uuids, reason, opts)
         {:error, reason}
     end
   end
@@ -783,6 +789,33 @@ defmodule PhoenixKitEntities do
       resource_type: "entity",
       resource_uuid: first_uuid,
       metadata: %{"count" => length(uuids)}
+    })
+  end
+
+  defp log_entity_reorder_activity_error([], _reason, _opts), do: :ok
+
+  defp log_entity_reorder_activity_error([first_uuid | _rest] = uuids, _reason, opts) do
+    PhoenixKitEntities.ActivityLog.log(%{
+      action: "entity.reordered",
+      mode: "manual",
+      actor_uuid: Keyword.get(opts, :actor_uuid),
+      resource_type: "entity",
+      resource_uuid: first_uuid,
+      metadata: %{"count" => length(uuids), "db_pending" => true}
+    })
+  end
+
+  defp log_entity_reorder_rejected(reason, count, opts) do
+    PhoenixKitEntities.ActivityLog.log(%{
+      action: "entity.reordered",
+      mode: "manual",
+      actor_uuid: Keyword.get(opts, :actor_uuid),
+      resource_type: "entity",
+      metadata: %{
+        "count" => count,
+        "db_pending" => true,
+        "rejected" => to_string(reason)
+      }
     })
   end
 

@@ -467,6 +467,46 @@ defmodule PhoenixKitEntities.EntityData do
   defp position_update_query(uuid, scope) when is_binary(scope),
     do: from(d in __MODULE__, where: d.uuid == ^uuid and d.entity_uuid == ^scope)
 
+  # Audit-log a reorder failure so the user-initiated action is
+  # represented in the activity table even when the DB write rolls
+  # back. `db_pending: true` lets consumers distinguish from
+  # successful rows.
+  defp log_data_reorder_error(uuid_position_pairs, entity_uuid_scope, _reason, opts) do
+    PhoenixKitEntities.ActivityLog.log(%{
+      action: "entity_data.reordered",
+      mode: "manual",
+      actor_uuid: Keyword.get(opts, :actor_uuid),
+      resource_type: "entity_data",
+      resource_uuid: first_uuid_from_pairs(uuid_position_pairs),
+      metadata: %{
+        "entity_uuid" => entity_uuid_scope,
+        "count" => length(uuid_position_pairs),
+        "db_pending" => true
+      }
+    })
+  end
+
+  # Audit-log an early-rejection (oversized payload). Same shape as
+  # the error path; flagged with `rejected:` so audit consumers can
+  # tell rejection apart from a DB failure.
+  defp log_data_reorder_rejected(reason, count, opts) do
+    PhoenixKitEntities.ActivityLog.log(%{
+      action: "entity_data.reordered",
+      mode: "manual",
+      actor_uuid: Keyword.get(opts, :actor_uuid),
+      resource_type: "entity_data",
+      metadata: %{
+        "entity_uuid" => Keyword.get(opts, :entity_uuid),
+        "count" => count,
+        "db_pending" => true,
+        "rejected" => to_string(reason)
+      }
+    })
+  end
+
+  defp first_uuid_from_pairs([{uuid, _} | _]) when is_binary(uuid), do: uuid
+  defp first_uuid_from_pairs(_), do: nil
+
   defp notify_reorder_event(entity_uuid) when is_binary(entity_uuid) do
     Events.broadcast_data_reordered(entity_uuid)
   end
@@ -793,8 +833,9 @@ defmodule PhoenixKitEntities.EntityData do
   """
   def bulk_update_positions(uuid_position_pairs, opts \\ [])
 
-  def bulk_update_positions(uuid_position_pairs, _opts)
+  def bulk_update_positions(uuid_position_pairs, opts)
       when is_list(uuid_position_pairs) and length(uuid_position_pairs) > @reorder_max_uuids do
+    log_data_reorder_rejected(:too_many_uuids, length(uuid_position_pairs), opts)
     {:error, :too_many_uuids}
   end
 
@@ -832,6 +873,8 @@ defmodule PhoenixKitEntities.EntityData do
         :ok
 
       {:error, reason} ->
+        # Cover the user-initiated action even when the DB write fails.
+        log_data_reorder_error(uuid_position_pairs, entity_uuid_scope, reason, opts)
         {:error, reason}
     end
   end
@@ -927,14 +970,14 @@ defmodule PhoenixKitEntities.EntityData do
       iex> reorder(entity_uuid, ["uuid3", "uuid1", "uuid2"])
       :ok
   """
-  def reorder(entity_uuid, ordered_uuids)
+  def reorder(entity_uuid, ordered_uuids, opts \\ [])
       when is_binary(entity_uuid) and is_list(ordered_uuids) do
     pairs =
       ordered_uuids
       |> Enum.with_index(1)
       |> Enum.map(fn {uuid, pos} -> {uuid, pos} end)
 
-    bulk_update_positions(pairs, entity_uuid: entity_uuid)
+    bulk_update_positions(pairs, Keyword.put(opts, :entity_uuid, entity_uuid))
   end
 
   @doc """

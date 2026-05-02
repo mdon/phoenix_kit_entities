@@ -210,10 +210,25 @@ EntityData.get_by_slug(entity.uuid, "iphone-15")
 
 ### Manual ordering
 
-Entities can use auto sort (by creation date) or manual sort (by position). Configure via the entity's `settings`:
+Both **entity definitions** (the list at `/admin/entities`) and **data records** within an entity carry an integer `position` column managed by core's V81 / V108 migrations. Two reorder surfaces are exposed:
+
+- `Entities.reorder_entities(ordered_uuids, opts \\ [])` — re-indexes the entity list to positions `1..N` in the order given. Logs `entity.reordered` (PII-safe — count + first uuid only). Broadcasts `:entity_updated` so the dashboard sidebar's entity-summaries cache invalidates immediately. Capped at 1000 uuids; oversized payloads return `{:error, :too_many_uuids}` and still log a `db_pending` audit row so the rejected attempt is attributable.
+- `EntityData.reorder(entity_uuid, ordered_uuids, opts \\ [])` — re-indexes the records of one entity. Internally enforces the `entity_uuid` scope at the DB layer so a stray cross-entity uuid in the input list cannot rewrite positions in the wrong scope. Same 1000-uuid cap and audit semantics. Broadcasts `:data_reordered` for live LV refresh.
+
+Each entity carries a `sort_mode` setting (`"auto"` — by creation date — or `"manual"` — by `position`). Configure via:
 
 ```elixir
 PhoenixKitEntities.update_sort_mode(entity, "manual")
+```
+
+The DataNavigator admin LV auto-flips an entity to `"manual"` on the first drag (otherwise the visible reorder would snap back on the next refresh) and emits a `Logger.warning` so ops can see the implicit setting change. To opt entities-list reorder out for non-admin pages, gate the LV call site on `Scope.admin?/1` — the context API itself is not auth-gated.
+
+```elixir
+# Reorder entity definitions
+:ok = PhoenixKitEntities.reorder_entities([uuid_b, uuid_a, uuid_c], actor_uuid: admin.uuid)
+
+# Reorder data records within one entity
+:ok = PhoenixKitEntities.EntityData.reorder(entity.uuid, [r3.uuid, r1.uuid, r2.uuid], actor_uuid: admin.uuid)
 ```
 
 ## Field types

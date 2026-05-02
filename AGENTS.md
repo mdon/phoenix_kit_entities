@@ -166,9 +166,34 @@ and Settings.
   `data` and `metadata` field values
 - Both use UUIDv7 primary keys
 - Migrations are owned by core PhoenixKit (`V17` creates the tables;
-  `V40` / `V58` / `V67` / `V74` / `V81` evolve them). No module-owned
-  DDL anywhere — the host app runs `PhoenixKit.Migrations.up()` and
-  gets everything.
+  `V40` / `V58` / `V67` / `V74` / `V81` / `V108` evolve them). No
+  module-owned DDL anywhere — the host app runs
+  `PhoenixKit.Migrations.up()` and gets everything.
+
+### Drag-and-drop reorder API
+
+Both lists carry an integer `position` column (V81 for entity_data,
+V108 for entities) that drives manual sort.
+
+- `Entities.reorder_entities(ordered_uuids, opts)` — re-indexes the
+  entity definitions to positions `1..N`. Logs `entity.reordered`,
+  broadcasts `:entity_updated` for sidebar cache invalidation. Capped
+  at 1000 uuids; oversized rejects with `{:error, :too_many_uuids}`
+  AND audit-logs the rejection (`db_pending: true`,
+  `rejected: "too_many_uuids"`).
+- `EntityData.reorder(entity_uuid, ordered_uuids, opts)` — re-indexes
+  records within one entity. The DB layer enforces the entity_uuid
+  scope so a stray cross-entity uuid in the input list cannot rewrite
+  positions in the wrong scope (every per-uuid `update_all`
+  AND-filters on `entity_uuid`). Same 1000-cap + dedup behavior.
+- Both functions log on `:ok` AND `:error` branches; the error branch
+  carries `db_pending: true` so the audit trail covers user-initiated
+  intent even when the transaction rolls back.
+- LV call sites (`Web.Entities`, `Web.DataNavigator`) thread
+  `actor_opts(socket)` so the activity rows pin `actor_uuid`. The
+  DataNavigator auto-flips `sort_mode` to `"manual"` on the first
+  drag and emits a `Logger.warning` so ops can see the implicit
+  setting change.
 
 ### Activity Logging Pattern
 

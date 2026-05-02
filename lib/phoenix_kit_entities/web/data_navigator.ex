@@ -357,7 +357,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
     entity = ensure_manual_sort(socket.assigns.selected_entity)
     entity_uuid = socket.assigns.selected_entity_uuid
 
-    case EntityData.reorder(entity_uuid, ordered_ids) do
+    case EntityData.reorder(entity_uuid, ordered_ids, actor_opts(socket)) do
       :ok ->
         {:noreply,
          socket
