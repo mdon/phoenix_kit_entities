@@ -353,66 +353,6 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
     {:noreply, put_flash(socket, :error, gettext("Failed to save the new order"))}
   end
 
-  defp apply_record_reorder(socket, ordered_ids) do
-    {entity, sort_flipped?} = ensure_manual_sort(socket.assigns.selected_entity)
-    entity_uuid = socket.assigns.selected_entity_uuid
-
-    case EntityData.reorder(entity_uuid, ordered_ids, actor_opts(socket)) do
-      :ok ->
-        socket =
-          socket
-          |> assign(:selected_entity, entity)
-          |> apply_filters()
-
-        socket =
-          if sort_flipped? == :failed do
-            put_flash(
-              socket,
-              :warning,
-              gettext(
-                "Positions saved, but sort mode could not be switched to manual — order may not survive a refresh."
-              )
-            )
-          else
-            socket
-          end
-
-        {:noreply, socket}
-
-      _ ->
-        {:noreply, put_flash(socket, :error, gettext("Failed to save the new order"))}
-    end
-  end
-
-  # First drag implicitly switches the entity to manual sort — otherwise
-  # the visible order would snap back to date-created on the next refresh
-  # and the user would see their drag undone. Logs a warning so admins
-  # can see the silent setting flip in the application log; the flip
-  # itself also lands as an `entity.updated` activity row via the
-  # context's notify hook.
-  defp ensure_manual_sort(entity) do
-    if Entities.manual_sort?(entity) do
-      {entity, :already_manual}
-    else
-      case Entities.update_sort_mode(entity, "manual") do
-        {:ok, updated} ->
-          Logger.warning(
-            "DataNavigator: entity #{entity.uuid} (#{entity.name}) auto-switched sort_mode to \"manual\" on first drag"
-          )
-
-          {updated, :flipped}
-
-        {:error, changeset} ->
-          Logger.error(
-            "DataNavigator: failed to auto-switch sort_mode to \"manual\" for " <>
-              "entity #{entity.uuid} (#{entity.name}): #{inspect(changeset.errors)}"
-          )
-
-          {entity, :failed}
-      end
-    end
-  end
-
   def handle_event("toggle_select", %{"uuid" => uuid}, socket) do
     selected = socket.assigns.selected_uuids
 
@@ -517,6 +457,66 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
       end
     else
       {:noreply, put_flash(socket, :error, gettext("Not authorized"))}
+    end
+  end
+
+  defp apply_record_reorder(socket, ordered_ids) do
+    {entity, sort_flipped?} = ensure_manual_sort(socket.assigns.selected_entity)
+    entity_uuid = socket.assigns.selected_entity_uuid
+
+    case EntityData.reorder(entity_uuid, ordered_ids, actor_opts(socket)) do
+      :ok ->
+        socket =
+          socket
+          |> assign(:selected_entity, entity)
+          |> apply_filters()
+
+        socket =
+          if sort_flipped? == :failed do
+            put_flash(
+              socket,
+              :warning,
+              gettext(
+                "Positions saved, but sort mode could not be switched to manual — order may not survive a refresh."
+              )
+            )
+          else
+            socket
+          end
+
+        {:noreply, socket}
+
+      _ ->
+        {:noreply, put_flash(socket, :error, gettext("Failed to save the new order"))}
+    end
+  end
+
+  # First drag implicitly switches the entity to manual sort — otherwise
+  # the visible order would snap back to date-created on the next refresh
+  # and the user would see their drag undone. Logs a warning so admins
+  # can see the silent setting flip in the application log; the flip
+  # itself also lands as an `entity.updated` activity row via the
+  # context's notify hook.
+  defp ensure_manual_sort(entity) do
+    if Entities.manual_sort?(entity) do
+      {entity, :already_manual}
+    else
+      case Entities.update_sort_mode(entity, "manual") do
+        {:ok, updated} ->
+          Logger.warning(
+            "DataNavigator: entity #{entity.uuid} (#{entity.name}) auto-switched sort_mode to \"manual\" on first drag"
+          )
+
+          {updated, :flipped}
+
+        {:error, changeset} ->
+          Logger.error(
+            "DataNavigator: failed to auto-switch sort_mode to \"manual\" for " <>
+              "entity #{entity.uuid} (#{entity.name}): #{inspect(changeset.errors)}"
+          )
+
+          {entity, :failed}
+      end
     end
   end
 

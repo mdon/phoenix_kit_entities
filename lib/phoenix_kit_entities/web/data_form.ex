@@ -261,17 +261,6 @@ defmodule PhoenixKitEntities.Web.DataForm do
       {:noreply, put_flash(socket, :error, gettext("Something went wrong. Please try again."))}
   end
 
-  # Pulls the resource uuid off socket assigns for use in error log
-  # context. Returns `nil` when the assign is missing or the underlying
-  # struct hasn't been hydrated yet (e.g. an exception during the very
-  # first validate before the entity is loaded).
-  defp record_uuid_for_log(socket, key) do
-    case socket.assigns[key] do
-      %{uuid: uuid} -> uuid
-      _ -> nil
-    end
-  end
-
   def handle_event("reset", _params, socket) do
     if socket.assigns[:lock_owner?] do
       # Reload data record from database or reset to empty state
@@ -312,6 +301,17 @@ defmodule PhoenixKitEntities.Web.DataForm do
       do_generate_slug(socket)
     else
       {:noreply, socket}
+    end
+  end
+
+  # Pulls the resource uuid off socket assigns for use in error log
+  # context. Returns `nil` when the assign is missing or the underlying
+  # struct hasn't been hydrated yet (e.g. an exception during the very
+  # first validate before the entity is loaded).
+  defp record_uuid_for_log(socket, key) do
+    case socket.assigns[key] do
+      %{uuid: uuid} -> uuid
+      _ -> nil
     end
   end
 
