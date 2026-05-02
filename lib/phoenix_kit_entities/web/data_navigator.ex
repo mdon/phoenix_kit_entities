@@ -332,42 +332,64 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
 
   def handle_event("reorder_records", %{"ordered_ids" => ordered_ids}, socket)
       when is_list(ordered_ids) do
-    if Scope.admin?(socket.assigns.phoenix_kit_current_scope) do
-      entity = socket.assigns.selected_entity
-      entity_uuid = socket.assigns.selected_entity_uuid
+    cond do
+      not Scope.admin?(socket.assigns.phoenix_kit_current_scope) ->
+        {:noreply, put_flash(socket, :error, gettext("Not authorized"))}
 
-      cond do
-        is_nil(entity) or is_nil(entity_uuid) ->
-          {:noreply, socket}
+      is_nil(socket.assigns.selected_entity) or is_nil(socket.assigns.selected_entity_uuid) ->
+        {:noreply, socket}
 
-        true ->
-          # First drag implicitly switches the entity to manual sort —
-          # otherwise the visible order would snap back to date-created
-          # on the next refresh and the user would see their drag undone.
-          entity =
-            if Entities.manual_sort?(entity) do
-              entity
-            else
-              case Entities.update_sort_mode(entity, "manual") do
-                {:ok, updated} -> updated
-                _ -> entity
-              end
-            end
+      true ->
+        apply_record_reorder(socket, ordered_ids)
+    end
+  end
 
-          case EntityData.reorder(entity_uuid, ordered_ids) do
-            :ok ->
-              {:noreply,
-               socket
-               |> assign(:selected_entity, entity)
-               |> apply_filters()}
+  # Catch-all for malformed reorder_records payloads (missing
+  # ordered_ids key, wrong type). Defensive — the SortableGrid hook
+  # always produces a list under the right key, but a stale browser
+  # tab or a custom client could trip this. Flash + no-op rather than
+  # crash the LV socket.
+  def handle_event("reorder_records", _params, socket) do
+    {:noreply, put_flash(socket, :error, gettext("Failed to save the new order"))}
+  end
 
-            _ ->
-              {:noreply,
-               put_flash(socket, :error, gettext("Failed to save the new order"))}
-          end
-      end
+  defp apply_record_reorder(socket, ordered_ids) do
+    entity = ensure_manual_sort(socket.assigns.selected_entity)
+    entity_uuid = socket.assigns.selected_entity_uuid
+
+    case EntityData.reorder(entity_uuid, ordered_ids) do
+      :ok ->
+        {:noreply,
+         socket
+         |> assign(:selected_entity, entity)
+         |> apply_filters()}
+
+      _ ->
+        {:noreply, put_flash(socket, :error, gettext("Failed to save the new order"))}
+    end
+  end
+
+  # First drag implicitly switches the entity to manual sort — otherwise
+  # the visible order would snap back to date-created on the next refresh
+  # and the user would see their drag undone. Logs a warning so admins
+  # can see the silent setting flip in the application log; the flip
+  # itself also lands as an `entity.updated` activity row via the
+  # context's notify hook.
+  defp ensure_manual_sort(entity) do
+    if Entities.manual_sort?(entity) do
+      entity
     else
-      {:noreply, put_flash(socket, :error, gettext("Not authorized"))}
+      case Entities.update_sort_mode(entity, "manual") do
+        {:ok, updated} ->
+          Logger.warning(
+            "DataNavigator: entity #{entity.uuid} (#{entity.name}) auto-switched sort_mode to \"manual\" on first drag"
+          )
+
+          updated
+
+        _ ->
+          entity
+      end
     end
   end
 

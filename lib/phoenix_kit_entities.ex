@@ -710,33 +710,80 @@ defmodule PhoenixKitEntities do
   Wraps both passes in a single transaction. Returns `:ok` on success
   or `{:error, reason}` on transaction failure.
   """
-  @spec reorder_entities([Ecto.UUID.t()]) :: :ok | {:error, term()}
-  def reorder_entities(ordered_uuids) when is_list(ordered_uuids) do
-    pairs = Enum.with_index(ordered_uuids, 1)
+  # Same cap as `EntityData.bulk_update_positions/2`. Reorder is a
+  # per-page action; even a workspace with hundreds of entities would
+  # never paint a thousand at once.
+  @reorder_entities_max_uuids 1000
 
-    case repo().transaction(fn ->
-           Enum.each(pairs, fn {uuid, idx} ->
-             from(e in __MODULE__, where: e.uuid == ^uuid)
-             |> repo().update_all(set: [position: idx, date_updated: UtilsDate.utc_now()])
-           end)
-         end) do
+  @spec reorder_entities([Ecto.UUID.t()], keyword()) :: :ok | {:error, term()}
+  def reorder_entities(ordered_uuids, opts \\ [])
+
+  def reorder_entities(ordered_uuids, _opts)
+      when is_list(ordered_uuids) and length(ordered_uuids) > @reorder_entities_max_uuids do
+    {:error, :too_many_uuids}
+  end
+
+  def reorder_entities(ordered_uuids, opts) when is_list(ordered_uuids) do
+    # Dedup defensively (last occurrence wins, same shape as
+    # `EntityData.bulk_update_positions/2`).
+    unique_uuids =
+      ordered_uuids
+      |> Enum.reverse()
+      |> Enum.uniq()
+      |> Enum.reverse()
+
+    case write_entity_positions(unique_uuids) do
       {:ok, _} ->
+        # Audit-log the reorder. Metadata stays PII-safe — count + the
+        # first uuid are enough to attribute the action and locate it
+        # in the table; the full ordered list would bloat the row and
+        # add no diagnostic value beyond what `Entities.list_entities/0`
+        # at the same instant already shows.
+        log_entity_reorder_activity(unique_uuids, opts)
+
         # Reuse the existing `:entity_updated` event — it's already
         # wired to invalidate the Dashboard sidebar cache and refresh
         # any open Entities/EntitiesSettings/DataNavigator LVs that
         # render entity-keyed lists. Broadcasting once with the first
         # uuid is sufficient since every listener re-fetches the full
         # list on receipt.
-        case List.first(ordered_uuids) do
-          uuid when is_binary(uuid) -> Events.broadcast_entity_updated(uuid)
-          _ -> :ok
-        end
+        broadcast_first_entity_updated(unique_uuids)
 
         :ok
 
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  defp write_entity_positions(unique_uuids) do
+    pairs = Enum.with_index(unique_uuids, 1)
+    now = UtilsDate.utc_now()
+
+    repo().transaction(fn ->
+      Enum.each(pairs, fn {uuid, idx} ->
+        from(e in __MODULE__, where: e.uuid == ^uuid)
+        |> repo().update_all(set: [position: idx, date_updated: now])
+      end)
+    end)
+  end
+
+  defp broadcast_first_entity_updated([uuid | _]) when is_binary(uuid),
+    do: Events.broadcast_entity_updated(uuid)
+
+  defp broadcast_first_entity_updated(_), do: :ok
+
+  defp log_entity_reorder_activity([], _opts), do: :ok
+
+  defp log_entity_reorder_activity([first_uuid | _rest] = uuids, opts) do
+    PhoenixKitEntities.ActivityLog.log(%{
+      action: "entity.reordered",
+      mode: "manual",
+      actor_uuid: Keyword.get(opts, :actor_uuid),
+      resource_type: "entity",
+      resource_uuid: first_uuid,
+      metadata: %{"count" => length(uuids)}
+    })
   end
 
   @doc """

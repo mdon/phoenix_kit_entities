@@ -98,7 +98,7 @@ defmodule PhoenixKitEntities.Web.Entities do
 
   def handle_event("reorder_entities", %{"ordered_ids" => ordered_ids}, socket)
       when is_list(ordered_ids) do
-    case Entities.reorder_entities(ordered_ids) do
+    case Entities.reorder_entities(ordered_ids, actor_opts(socket)) do
       :ok ->
         {:noreply,
          assign(socket, :entities, Entities.list_entities(lang: socket.assigns[:current_locale]))}
@@ -106,6 +106,14 @@ defmodule PhoenixKitEntities.Web.Entities do
       {:error, _reason} ->
         {:noreply, put_flash(socket, :error, gettext("Failed to save the new order"))}
     end
+  end
+
+  # Defensive catch-all: a stale browser tab or a custom client could
+  # push a malformed `reorder_entities` payload (missing `ordered_ids`
+  # or wrong type). Flash + no-op rather than crash the LV socket
+  # with a MatchError.
+  def handle_event("reorder_entities", _params, socket) do
+    {:noreply, put_flash(socket, :error, gettext("Failed to save the new order"))}
   end
 
   ## Live updates

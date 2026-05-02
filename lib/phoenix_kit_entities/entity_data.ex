@@ -457,6 +457,16 @@ defmodule PhoenixKitEntities.EntityData do
   end
 
   # Broadcast a reorder event for an entity so live views refresh.
+  # Builds the WHERE clause for `bulk_update_positions/2`. When a
+  # scope uuid is supplied, the entity_uuid filter prevents a stray
+  # cross-entity uuid in the input list from rewriting positions in
+  # the wrong scope.
+  defp position_update_query(uuid, nil),
+    do: from(d in __MODULE__, where: d.uuid == ^uuid)
+
+  defp position_update_query(uuid, scope) when is_binary(scope),
+    do: from(d in __MODULE__, where: d.uuid == ^uuid and d.entity_uuid == ^scope)
+
   defp notify_reorder_event(entity_uuid) when is_binary(entity_uuid) do
     Events.broadcast_data_reordered(entity_uuid)
   end
@@ -751,25 +761,64 @@ defmodule PhoenixKitEntities.EntityData do
     __MODULE__.update(entity_data, %{position: position})
   end
 
+  # Cap on the number of UUIDs accepted by a single reorder/bulk
+  # call. Reorder is a per-page operation; even the largest realistic
+  # entity won't have 1000 records visible at once. Beyond this we'd
+  # expect an explicit batched API instead of an unbounded transaction.
+  @reorder_max_uuids 1000
+
   @doc """
   Bulk updates positions for multiple records.
 
   Accepts a list of `{uuid, position}` tuples. Each record is updated
   individually to trigger events and maintain consistency.
 
+  ## Options
+
+    * `:entity_uuid` — when provided, the WHERE clause also filters on
+      `entity_uuid`, so a stray UUID from another entity in the input
+      list cannot have its position rewritten by the wrong scope. The
+      LV reorder paths always pass this; programmatic callers should
+      too unless they really intend cross-entity rewrites.
+
+  Returns `{:error, :too_many_uuids}` if more than `#{1000}` pairs are
+  supplied — the cap protects the transaction from N+1 unbounded
+  `update_all` work and from a malformed LV payload turning into a
+  long-running write storm.
+
   ## Examples
 
-      iex> bulk_update_positions([{"uuid1", 1}, {"uuid2", 2}, {"uuid3", 3}])
+      iex> bulk_update_positions([{"uuid1", 1}, {"uuid2", 2}, {"uuid3", 3}], entity_uuid: e_uuid)
       :ok
   """
   def bulk_update_positions(uuid_position_pairs, opts \\ [])
+
+  def bulk_update_positions(uuid_position_pairs, _opts)
+      when is_list(uuid_position_pairs) and length(uuid_position_pairs) > @reorder_max_uuids do
+    {:error, :too_many_uuids}
+  end
+
+  def bulk_update_positions(uuid_position_pairs, opts)
       when is_list(uuid_position_pairs) do
+    entity_uuid_scope = Keyword.get(opts, :entity_uuid)
+
+    # Dedup defensively — a stale DOM may send the same UUID twice
+    # (e.g. a quick double-drop). We keep the *last* occurrence so the
+    # most recent intended position wins; same outcome the DB would
+    # produce, just without the wasted writes.
+    pairs =
+      uuid_position_pairs
+      |> Enum.reverse()
+      |> Enum.uniq_by(fn {uuid, _} -> uuid end)
+      |> Enum.reverse()
+
     result =
       repo().transaction(fn ->
         now = UtilsDate.utc_now()
 
-        Enum.each(uuid_position_pairs, fn {uuid, position} ->
-          from(d in __MODULE__, where: d.uuid == ^uuid)
+        Enum.each(pairs, fn {uuid, position} ->
+          uuid
+          |> position_update_query(entity_uuid_scope)
           |> repo().update_all(set: [position: position, date_updated: now])
         end)
       end)
@@ -777,7 +826,7 @@ defmodule PhoenixKitEntities.EntityData do
     case result do
       {:ok, _} ->
         entity_uuid =
-          Keyword.get(opts, :entity_uuid) || resolve_entity_uuid_from_pairs(uuid_position_pairs)
+          entity_uuid_scope || resolve_entity_uuid_from_pairs(uuid_position_pairs)
 
         notify_reorder_event(entity_uuid)
         :ok

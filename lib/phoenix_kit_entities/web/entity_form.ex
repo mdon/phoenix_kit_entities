@@ -1942,12 +1942,11 @@ defmodule PhoenixKitEntities.Web.EntityForm do
                       </option>
                     </select>
                   </label>
-                  <%!-- TODO: uncomment when table drag-and-drop is ready --%>
-                  <%!-- <.label class="label">
+                  <.label class="label">
                     <span class="label-text-alt">
                       {gettext("Manual mode enables drag-and-drop reordering of records")}
                     </span>
-                  </.label> --%>
+                  </.label>
                 </div>
               </div>
             </div>
