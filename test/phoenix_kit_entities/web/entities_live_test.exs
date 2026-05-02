@@ -104,6 +104,39 @@ defmodule PhoenixKitEntities.Web.EntitiesLiveTest do
     end
   end
 
+  describe "reorder_entities (drag-and-drop)" do
+    test "valid ordered_ids re-indexes positions and pins the activity actor_uuid",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/entities")
+
+      ordered = [ctx.archived.uuid, ctx.published.uuid]
+      render_hook(view, "reorder_entities", %{"ordered_ids" => ordered})
+
+      assert Entities.get_entity!(ctx.archived.uuid).position == 1
+      assert Entities.get_entity!(ctx.published.uuid).position == 2
+
+      assert_activity_logged("entity.reordered",
+        actor_uuid: ctx.actor_uuid,
+        resource_type: "entity",
+        resource_uuid: ctx.archived.uuid,
+        metadata_has: %{"count" => 2}
+      )
+    end
+
+    test "malformed payload (no ordered_ids key) flashes error without crashing",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/entities")
+
+      render_hook(view, "reorder_entities", %{"unexpected" => "shape"})
+
+      assert render(view) =~ "Failed to save the new order"
+      # LV still alive — no MatchError crash.
+      assert render(view) =~ ctx.published.display_name
+    end
+  end
+
   describe "handle_info catch-all" do
     test "ignores unrelated messages without crashing",
          %{conn: conn} = ctx do

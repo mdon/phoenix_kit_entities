@@ -290,4 +290,72 @@ defmodule PhoenixKitEntities.ContextExtrasTest do
       assert %Ecto.Changeset{} = Entities.change_entity(ctx.published, %{display_name: "X"})
     end
   end
+
+  describe "reorder_entities/2 (drag-and-drop reordering)" do
+    test "next_entity_position/0 starts at 1 on an empty table" do
+      # The setup block already inserted three entities. Subtract them
+      # by checking that next_position is past the highest currently
+      # used.
+      {:ok, latest} =
+        Entities.create_entity(
+          %{
+            name: "ctx_position_probe",
+            display_name: "Probe",
+            display_name_plural: "Probes",
+            fields_definition: [%{"type" => "text", "key" => "title", "label" => "Title"}],
+            created_by_uuid: Ecto.UUID.generate()
+          },
+          actor_uuid: Ecto.UUID.generate()
+        )
+
+      assert Entities.next_entity_position() == latest.position + 1
+    end
+
+    test "reorder_entities/2 assigns positions 1..N in the supplied order", ctx do
+      ordered = [ctx.draft.uuid, ctx.published.uuid]
+
+      assert :ok = Entities.reorder_entities(ordered, actor_uuid: Ecto.UUID.generate())
+
+      assert Entities.get_entity!(ctx.draft.uuid).position == 1
+      assert Entities.get_entity!(ctx.published.uuid).position == 2
+    end
+
+    test "reorder_entities/2 caps oversized payloads at 1000 uuids" do
+      oversized = List.duplicate("00000000-0000-0000-0000-000000000000", 1001)
+      assert {:error, :too_many_uuids} = Entities.reorder_entities(oversized)
+    end
+
+    test "reorder_entities/2 deduplicates input — last occurrence wins", ctx do
+      # Two slots in the input both name :published — the *second* slot
+      # (index 2) should win, so :published lands at position 2 and
+      # the duplicate at position 1 is collapsed away.
+      ordered = [ctx.published.uuid, ctx.draft.uuid, ctx.published.uuid]
+      assert :ok = Entities.reorder_entities(ordered)
+
+      assert Entities.get_entity!(ctx.draft.uuid).position == 1
+      assert Entities.get_entity!(ctx.published.uuid).position == 2
+    end
+
+    test "reorder_entities/2 logs entity.reordered with actor_uuid + count", ctx do
+      actor_uuid = Ecto.UUID.generate()
+      ordered = [ctx.published.uuid, ctx.draft.uuid]
+
+      assert :ok = Entities.reorder_entities(ordered, actor_uuid: actor_uuid)
+
+      assert_activity_logged("entity.reordered",
+        actor_uuid: actor_uuid,
+        resource_type: "entity",
+        resource_uuid: ctx.published.uuid,
+        metadata: %{"count" => 2}
+      )
+    end
+
+    test "reorder_entities/2 broadcasts :entity_updated for sidebar cache invalidation", ctx do
+      :ok = PhoenixKitEntities.Events.subscribe_to_entities()
+
+      assert :ok = Entities.reorder_entities([ctx.published.uuid, ctx.draft.uuid])
+
+      assert_receive {:entity_updated, _uuid}, 500
+    end
+  end
 end

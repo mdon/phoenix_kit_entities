@@ -158,6 +158,59 @@ defmodule PhoenixKitEntities.EntityDataExtrasTest do
       assert EntityData.get(ctx.beta.uuid).position == 11
     end
 
+    test "bulk_update_positions/2 rejects payloads above the 1000-uuid cap" do
+      # Cheap synthetic — we never reach the DB because the guard
+      # short-circuits on length. Real UUID strings aren't required.
+      oversized = Enum.map(1..1001, fn idx -> {"00000000-0000-0000-0000-000000000000", idx} end)
+      assert {:error, :too_many_uuids} = EntityData.bulk_update_positions(oversized)
+    end
+
+    test "bulk_update_positions/2 enforces entity_uuid scope — cross-entity uuids ignored", ctx do
+      actor_uuid = Ecto.UUID.generate()
+
+      {:ok, other_entity} =
+        Entities.create_entity(
+          %{
+            name: "ed_extras_other",
+            display_name: "ED Other",
+            display_name_plural: "ED Others",
+            fields_definition: [%{"type" => "text", "key" => "title", "label" => "Title"}],
+            created_by_uuid: actor_uuid
+          },
+          actor_uuid: actor_uuid
+        )
+
+      {:ok, foreign} =
+        EntityData.create(
+          %{
+            entity_uuid: other_entity.uuid,
+            title: "Foreign",
+            slug: "foreign-row",
+            status: "published",
+            data: %{"title" => "Foreign"},
+            created_by_uuid: actor_uuid
+          },
+          actor_uuid: actor_uuid
+        )
+
+      original_position = foreign.position
+
+      # Mix the foreign uuid into a reorder scoped to ctx.entity. The
+      # foreign row must NOT have its position rewritten.
+      pairs = [{ctx.alpha.uuid, 1}, {foreign.uuid, 2}, {ctx.beta.uuid, 3}]
+      assert :ok = EntityData.bulk_update_positions(pairs, entity_uuid: ctx.entity.uuid)
+
+      assert EntityData.get(ctx.alpha.uuid).position == 1
+      assert EntityData.get(ctx.beta.uuid).position == 3
+      assert EntityData.get(foreign.uuid).position == original_position
+    end
+
+    test "bulk_update_positions/2 deduplicates — last occurrence wins", ctx do
+      pairs = [{ctx.alpha.uuid, 1}, {ctx.alpha.uuid, 99}]
+      assert :ok = EntityData.bulk_update_positions(pairs, entity_uuid: ctx.entity.uuid)
+      assert EntityData.get(ctx.alpha.uuid).position == 99
+    end
+
     test "move_to_position/2 with same position is a noop", ctx do
       {:ok, _} = EntityData.update_position(ctx.alpha, 5)
       reread = EntityData.get(ctx.alpha.uuid)
@@ -175,10 +228,12 @@ defmodule PhoenixKitEntities.EntityDataExtrasTest do
       assert EntityData.get(ctx.alpha.uuid).position == 3
     end
 
-    test "reorder/2 assigns 1, 2, 3 by ordered uuids", ctx do
+    test "reorder/2 assigns positions 1, 2, 3 by ordered uuids", ctx do
       ordered = [ctx.gamma.uuid, ctx.alpha.uuid, ctx.beta.uuid]
-      result = EntityData.reorder(ctx.entity.uuid, ordered)
-      assert result == :ok or result == :noop or match?({:error, _}, result)
+      assert :ok = EntityData.reorder(ctx.entity.uuid, ordered)
+      assert EntityData.get(ctx.gamma.uuid).position == 1
+      assert EntityData.get(ctx.alpha.uuid).position == 2
+      assert EntityData.get(ctx.beta.uuid).position == 3
     end
   end
 
