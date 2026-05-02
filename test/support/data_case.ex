@@ -60,4 +60,24 @@ defmodule PhoenixKitEntities.DataCase do
       end)
     end)
   end
+
+  # Computed at compile time so the `bcrypt_elixir` cost is paid once
+  # per suite, not once per test. The salt+hash baked into the module
+  # is stable for the life of the compiled test_support beam.
+  @valid_test_password_hash Bcrypt.hash_pwd_salt("test")
+
+  @doc """
+  Returns a valid bcrypt hash for seeding `phoenix_kit_users.hashed_password`
+  in test fixtures.
+
+  Replaces the hand-typed `"$2b$12$placeholder"` strings, which are
+  syntactically valid bcrypt prefixes but malformed payloads —
+  `Bcrypt.verify_pass/2` against them crashes rather than returning
+  `false`. Tests that seed and never authenticate still gain by
+  removing the foot-gun for any future caller that does.
+
+  The verifiable plaintext is `"test"` for any test that needs it.
+  """
+  @spec valid_test_password_hash() :: String.t()
+  def valid_test_password_hash, do: @valid_test_password_hash
 end
