@@ -1,3 +1,39 @@
+## 0.2.0 - 2026-05-04
+
+### Added
+- Soft-delete for `EntityData` (issue #12) — keeps rows alive when parent apps hold FK references (e.g. `orders.status_uuid` → `phoenix_kit_entity_data.uuid`). New status sentinel `"trashed"` joins the existing `{draft, published, archived}` set; no migration required.
+- New public API on `PhoenixKitEntities.EntityData`: `trash/2`, `restore_from_trash/2`, `bulk_trash/2`, `bulk_restore_from_trash/2`, `list_trashed_by_entity/2`, `trashed_count/1`.
+- `count_external_references/1` and `count_external_references/2` — reads `Application.get_env(:phoenix_kit_entities, :reverse_references, [])` (a list of `{entity_name, count_fn}` tuples) so parent apps can surface "used by N rows" hints. The 2-arity form takes a pre-loaded entity to skip the per-call preload when rendering many records. Informational only — not a delete-blocker.
+- Three new error atoms in `PhoenixKitEntities.Errors`: `:already_trashed`, `:not_trashed`, `:referenced_by_external` with localized messages.
+- DataNavigator admin UX: Trash filter view with count badge, per-row Restore-from-trash + Delete-forever buttons on trashed records, bulk-action bar branches by view (Archive/Restore/Trash on default views; Restore/Delete-forever on the Trash view).
+- 130 net new tests — `entity_data_trash_test.exs` (49 tests) builds transient `_trash_test_parent` tables that mirror issue #12's exact `NOT NULL REFERENCES … ON DELETE RESTRICT` shape, exercising FK-violation paths against a real parent FK. New describe block in `data_navigator_live_test.exs` (18 tests) covers all event handlers + authorization + bulk-bar branching.
+- AGENTS.md gained a "Soft-delete (trash) for EntityData" section documenting the parent-app FK motivation, public API, default-list filtering rules, slug uniqueness rationale, and the `:reverse_references` config hook.
+
+### Changed
+- `delete/2` and `bulk_delete/2` now catch `Ecto.ConstraintError` (foreign-key) and `Postgrex.Error` (SQLSTATE `23503` / `23502`) and return `{:error, :referenced_by_external}` instead of raising. The admin UI flashes a friendly message rather than a 500. **Soft return-shape change** — callers exhaustively pattern-matching `{:ok, _} | {:error, %Ecto.Changeset{}}` should add a clause for the new atom.
+- Default-list queries (`list_all/1`, `list_by_entity/2`, `search_by_title/3`, `count_by_entity/2`) exclude trashed records by default. Pass `include_trashed: true` to opt in (admin trash views, reverse-reference checks). Mirror exporter inherits this exclusion — trashed records won't resurrect on re-export.
+- `get_data_stats/1` now returns `trashed_records` separately; `total_records` reflects the visible (non-trashed) count.
+- `get_by_slug/2` deliberately surfaces trashed rows so slug uniqueness is preserved across the trash bin.
+- DataNavigator bulk Delete repurposed → soft-trash; permanent delete is a separate action available only from the Trash filter view.
+- `toggle_status` cycle skips trashed (Restore is the only escape).
+- `phx-disable-with` added to all 8 bulk-action buttons (3 from soft-delete additions + 5 pre-existing oversights).
+- `entity_form_controller.ex` `private_or_local_ip?/1` swapped from `String.to_integer + rescue _` to `Integer.parse/1` with explicit `with`/`else` chain — pins `{int, ""}` so `"123abc"` no longer slips through as `123`.
+- `sitemap_source.ex` `sub_sitemaps/1` `rescue _ -> nil` now logs the error inspect, matching the canonical pattern at the other two rescues in the file.
+- `sitemap_source.ex` `enabled?/0` gained `catch :exit, _ -> false` to match the boot-resilience shape from `phoenix_kit_entities.ex` (sandbox-shutdown signals).
+- `@spec` backfill on `list_trashed_by_entity/2` and `trashed_count/1`.
+
+## 0.1.7 - 2026-05-02
+
+### Changed
+- `Web.Entities` reorder/archive/restore handlers now gate on `Scope.admin?` before any DB access — closes the missing-auth gap surfaced in PR #11 review.
+- Card-view duplication in `Web.DataNavigator` collapsed via the `:draggable` attr on `<.draggable_list>` — ~80 lines removed.
+- `position_update_query/2` raises `ArgumentError` on non-binary scope values (was silently fall-through).
+- `ensure_manual_sort/1` logs at `Logger.error` and surfaces a warning flash when the sort-mode flip fails — admins now see the silent setting-flip outcome instead of the failure being swallowed.
+
+### Added
+- Audit row shape table in AGENTS.md documenting `actor_uuid` / `resource_uuid` / `metadata` conventions across entity and entity_data activity rows.
+- Race-tolerance comment on `maybe_add_entity_position/1` documenting the concurrent-position-conflict resolution strategy.
+
 ## 0.1.6 - 2026-04-29
 
 ### Removed
