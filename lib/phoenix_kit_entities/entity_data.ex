@@ -11,7 +11,7 @@ defmodule PhoenixKitEntities.EntityData do
   - `entity_uuid`: Foreign key to the entity blueprint
   - `title`: Display title/name for the record
   - `slug`: URL-friendly identifier (optional)
-  - `status`: Record status ("draft", "published", "archived")
+  - `status`: Record status ("draft", "published", "archived", "trashed")
   - `data`: JSONB map of all field values based on entity definition
   - `metadata`: JSONB map for additional information (tags, categories, etc.)
   - `created_by`: User UUID who created the record
@@ -21,14 +21,17 @@ defmodule PhoenixKitEntities.EntityData do
   ## Core Functions
 
   ### Data Management
-  - `list_all/0` - Get all entity data records
-  - `list_by_entity/1` - Get all records for a specific entity
+  - `list_all/0` - Get all entity data records (excludes trashed by default)
+  - `list_by_entity/1` - Get all records for a specific entity (excludes trashed by default)
   - `list_by_entity_and_status/2` - Filter records by entity and status
+  - `list_trashed_by_entity/1` - Get only trashed records for an entity
   - `get!/1` - Get a record by ID (raises if not found)
-  - `get_by_slug/2` - Get a record by entity and slug
+  - `get_by_slug/2` - Get a record by entity and slug (returns trashed too — slug uniqueness)
   - `create/1` - Create a new record
   - `update/2` - Update an existing record
-  - `delete/1` - Delete a record
+  - `trash/1` - Soft-delete (sets status to "trashed", row stays alive — parent FKs keep resolving)
+  - `restore_from_trash/1` - Move a trashed record back to "published"
+  - `delete/1` - Hard-delete a record (returns `{:error, :referenced_by_external}` on FK violation)
   - `change/2` - Get changeset for forms
 
   ### Query Helpers
@@ -122,7 +125,8 @@ defmodule PhoenixKitEntities.EntityData do
     )
   end
 
-  @valid_statuses ~w(draft published archived)
+  @valid_statuses ~w(draft published archived trashed)
+  @soft_delete_status "trashed"
 
   @doc """
   Creates a changeset for entity data creation and updates.
@@ -415,6 +419,22 @@ defmodule PhoenixKitEntities.EntityData do
     {:ok, entity_data}
   end
 
+  defp notify_data_event({:ok, %__MODULE__{} = entity_data}, :trashed, opts) do
+    Events.broadcast_data_updated(entity_data.entity_uuid, entity_data.uuid)
+    # Re-export so the trashed record drops out of the mirror file
+    # (mirror queries default to non-trashed via list_data_by_entity).
+    maybe_mirror_data(entity_data)
+    log_data_activity(entity_data, "entity_data.trashed", opts)
+    {:ok, entity_data}
+  end
+
+  defp notify_data_event({:ok, %__MODULE__{} = entity_data}, :restored, opts) do
+    Events.broadcast_data_updated(entity_data.entity_uuid, entity_data.uuid)
+    maybe_mirror_data(entity_data)
+    log_data_activity(entity_data, "entity_data.restored", opts)
+    {:ok, entity_data}
+  end
+
   defp notify_data_event({:error, _} = result, event, opts) do
     log_data_error_activity(event, opts)
     result
@@ -556,6 +576,9 @@ defmodule PhoenixKitEntities.EntityData do
   @doc """
   Returns all entity data records ordered by creation date.
 
+  Trashed records are excluded by default. Pass `include_trashed: true` to
+  return them too — used by admin trash views and reverse-reference checks.
+
   ## Examples
 
       iex> PhoenixKitEntities.EntityData.list_all()
@@ -566,12 +589,16 @@ defmodule PhoenixKitEntities.EntityData do
       order_by: [desc: d.date_created],
       preload: [:entity, :creator]
     )
+    |> exclude_trashed(opts)
     |> repo().all()
     |> maybe_resolve_langs(opts)
   end
 
   @doc """
   Returns all entity data records for a specific entity.
+
+  Trashed records are excluded by default. Pass `include_trashed: true` to
+  return them too.
 
   ## Examples
 
@@ -586,8 +613,40 @@ defmodule PhoenixKitEntities.EntityData do
       order_by: ^order,
       preload: [:entity, :creator]
     )
+    |> exclude_trashed(opts)
     |> repo().all()
     |> maybe_resolve_langs(opts)
+  end
+
+  @doc """
+  Returns trashed records for a specific entity, ordered by most recently
+  updated (the default trash-bin view).
+
+  ## Examples
+
+      iex> PhoenixKitEntities.EntityData.list_trashed_by_entity(entity_uuid)
+      [%PhoenixKitEntities.EntityData{status: "trashed"}, ...]
+  """
+  def list_trashed_by_entity(entity_uuid, opts \\ []) when is_binary(entity_uuid) do
+    from(d in __MODULE__,
+      where: d.entity_uuid == ^entity_uuid and d.status == ^@soft_delete_status,
+      order_by: [desc: d.date_updated],
+      preload: [:entity, :creator]
+    )
+    |> repo().all()
+    |> maybe_resolve_langs(opts)
+  end
+
+  # Appends `where: status != "trashed"` unless caller opted in via
+  # `include_trashed: true`. Public consumers (sitemap, mirror exporter,
+  # admin default views) get the safe-by-default exclusion; trash-tab
+  # views and reverse-reference checks pass `include_trashed: true`.
+  defp exclude_trashed(query, opts) do
+    if Keyword.get(opts, :include_trashed, false) do
+      query
+    else
+      from(d in query, where: d.status != ^@soft_delete_status)
+    end
   end
 
   @doc """
@@ -1007,21 +1066,118 @@ defmodule PhoenixKitEntities.EntityData do
   end
 
   @doc """
-  Deletes an entity data record.
+  Hard-deletes an entity data record.
+
+  Prefer `trash/2` for soft-delete — it keeps the row alive so parent-app
+  FK references stay valid. Use this only when the record is genuinely
+  unreferenced (e.g. emptying the trash bin).
+
+  Catches `Postgrex.Error` for FK / NOT NULL violations and returns
+  `{:error, :referenced_by_external}` so the admin UI can render a friendly
+  flash instead of a 500. The row stays in the DB on this error.
 
   ## Examples
 
       iex> PhoenixKitEntities.EntityData.delete(record)
       {:ok, %PhoenixKitEntities.EntityData{}}
 
+      iex> # parent_app.orders has a NOT NULL FK to this row
       iex> PhoenixKitEntities.EntityData.delete(record)
-      {:error, %Ecto.Changeset{}}
+      {:error, :referenced_by_external}
   """
-  @spec delete(t(), keyword()) :: {:ok, t()} | {:error, Ecto.Changeset.t()}
+  @spec delete(t(), keyword()) ::
+          {:ok, t()} | {:error, Ecto.Changeset.t() | :referenced_by_external}
   def delete(%__MODULE__{} = entity_data, opts \\ []) do
     repo().delete(entity_data)
     |> notify_data_event(:deleted, opts)
+  rescue
+    # Ecto wraps Postgrex FK violations on Repo.delete in
+    # `Ecto.ConstraintError` because `delete/1` doesn't go through a
+    # changeset with declared constraints.
+    e in Ecto.ConstraintError ->
+      if e.type == :foreign_key do
+        log_data_error_activity(:deleted, opts)
+        {:error, :referenced_by_external}
+      else
+        reraise e, __STACKTRACE__
+      end
+
+    e in Postgrex.Error ->
+      if foreign_key_or_not_null_violation?(e) do
+        log_data_error_activity(:deleted, opts)
+        {:error, :referenced_by_external}
+      else
+        reraise e, __STACKTRACE__
+      end
   end
+
+  @doc """
+  Soft-deletes an entity data record by setting its status to `"trashed"`.
+
+  The row remains in the database so any parent-app FK references stay
+  valid — historical orders, audit logs, etc. continue to resolve. The
+  record is hidden from default `list_*` queries; use `list_trashed_by_entity/2`
+  to surface it for the admin trash view.
+
+  Logs `entity_data.trashed` activity. Refuses with `{:error, :already_trashed}`
+  if the record is already trashed.
+
+  ## Examples
+
+      iex> EntityData.trash(record, actor_uuid: admin.uuid)
+      {:ok, %EntityData{status: "trashed"}}
+  """
+  @spec trash(t(), keyword()) :: {:ok, t()} | {:error, :already_trashed | Ecto.Changeset.t()}
+  def trash(%__MODULE__{status: @soft_delete_status}, _opts), do: {:error, :already_trashed}
+
+  def trash(%__MODULE__{} = entity_data, opts) when is_list(opts) do
+    entity_data
+    |> changeset(%{status: @soft_delete_status})
+    |> repo().update()
+    |> notify_data_event(:trashed, opts)
+  end
+
+  def trash(%__MODULE__{} = entity_data), do: trash(entity_data, [])
+
+  @doc """
+  Restores a trashed entity data record by setting its status back to
+  `"published"`.
+
+  Returns `{:error, :not_trashed}` if the record isn't currently trashed —
+  this is a guardrail against re-publishing arbitrary records via the
+  trash-restore path. Use `update/2` for general status changes.
+
+  ## Examples
+
+      iex> EntityData.restore_from_trash(trashed_record, actor_uuid: admin.uuid)
+      {:ok, %EntityData{status: "published"}}
+  """
+  @spec restore_from_trash(t(), keyword()) ::
+          {:ok, t()} | {:error, :not_trashed | Ecto.Changeset.t()}
+  def restore_from_trash(entity_data, opts \\ [])
+
+  def restore_from_trash(%__MODULE__{status: @soft_delete_status} = entity_data, opts) do
+    entity_data
+    |> changeset(%{status: "published"})
+    |> repo().update()
+    |> notify_data_event(:restored, opts)
+  end
+
+  def restore_from_trash(%__MODULE__{}, _opts), do: {:error, :not_trashed}
+
+  # Match Postgres FK / NOT NULL violations raised when a parent-app row
+  # still references this record. SQLSTATE codes are stable: `23503` =
+  # foreign_key_violation, `23502` = not_null_violation. Any other error
+  # is re-raised so real bugs still surface.
+  defp foreign_key_or_not_null_violation?(%Postgrex.Error{postgres: %{code: code}})
+       when code in [:foreign_key_violation, :not_null_violation],
+       do: true
+
+  defp foreign_key_or_not_null_violation?(%Postgrex.Error{postgres: %{code: code}})
+       when is_binary(code) and code in ["23503", "23502"],
+       do: true
+
+  defp foreign_key_or_not_null_violation?(_), do: false
 
   @doc """
   Returns an `%Ecto.Changeset{}` for tracking entity data changes.
@@ -1075,7 +1231,9 @@ defmodule PhoenixKitEntities.EntityData do
           from(d in query, where: d.entity_uuid == ^uuid)
       end
 
-    repo().all(query)
+    query
+    |> exclude_trashed(opts)
+    |> repo().all()
     |> maybe_resolve_langs(opts)
   end
 
@@ -1092,20 +1250,42 @@ defmodule PhoenixKitEntities.EntityData do
   end
 
   @doc """
-  Counts the total number of records for an entity.
+  Counts records for an entity.
+
+  Excludes trashed records by default. Pass `include_trashed: true` to
+  count everything.
 
   ## Examples
 
       iex> PhoenixKitEntities.EntityData.count_by_entity(entity_uuid)
       42
+
+      iex> PhoenixKitEntities.EntityData.count_by_entity(entity_uuid, include_trashed: true)
+      45
   """
-  def count_by_entity(entity_uuid) when is_binary(entity_uuid) do
+  def count_by_entity(entity_uuid, opts \\ []) when is_binary(entity_uuid) do
     from(d in __MODULE__, where: d.entity_uuid == ^entity_uuid, select: count(d.uuid))
+    |> exclude_trashed(opts)
+    |> repo().one()
+  end
+
+  @doc """
+  Counts trashed records for an entity. Drives the trash-bin badge.
+  """
+  def trashed_count(entity_uuid) when is_binary(entity_uuid) do
+    from(d in __MODULE__,
+      where: d.entity_uuid == ^entity_uuid and d.status == ^@soft_delete_status,
+      select: count(d.uuid)
+    )
     |> repo().one()
   end
 
   @doc """
   Gets records filtered by status across all entities.
+
+  When `status` is `"trashed"`, returns trashed records. For all other
+  statuses, the query is implicitly scoped (status filter excludes trashed
+  by virtue of matching a different status).
 
   ## Examples
 
@@ -1341,8 +1521,57 @@ defmodule PhoenixKitEntities.EntityData do
   @doc """
   Alias for delete/1 for consistency with LiveView naming.
   """
-  @spec delete_data(t(), keyword()) :: {:ok, t()} | {:error, Ecto.Changeset.t()}
+  @spec delete_data(t(), keyword()) ::
+          {:ok, t()} | {:error, Ecto.Changeset.t() | :referenced_by_external}
   def delete_data(entity_data, opts \\ []), do: __MODULE__.delete(entity_data, opts)
+
+  @doc """
+  Counts external (parent-app) rows that reference this record.
+
+  Reads `:reverse_references` from `Application.get_env/2` — a list of
+  `{entity_name, count_fn}` tuples where `count_fn` is a 1-arity
+  function that takes the entity_data uuid and returns a non-negative
+  integer. Returns the total count across all matching callbacks for
+  the record's entity, or `0` if no callbacks are registered.
+
+  This is informational, not a delete-blocker — soft-delete keeps the
+  row alive regardless. Used by the admin to render "Used by N rows"
+  hints before the operator clicks Trash or Permanently delete.
+
+  ## Configuration
+
+      # In parent app config:
+      config :phoenix_kit_entities,
+        reverse_references: [
+          {"order_status", &MyApp.Orders.count_orders_with_status/1},
+          {"sub_order_status", &MyApp.Orders.count_sub_orders_with_status/1}
+        ]
+  """
+  @spec count_external_references(t()) :: non_neg_integer()
+  def count_external_references(%__MODULE__{} = entity_data) do
+    entity = repo().preload(entity_data, :entity).entity
+
+    case entity do
+      %{name: name} when is_binary(name) ->
+        :phoenix_kit_entities
+        |> Application.get_env(:reverse_references, [])
+        |> Enum.filter(fn
+          {^name, fun} when is_function(fun, 1) -> true
+          _ -> false
+        end)
+        |> Enum.reduce(0, fn {_name, fun}, acc ->
+          try do
+            count = fun.(entity_data.uuid)
+            if is_integer(count) and count >= 0, do: acc + count, else: acc
+          rescue
+            _ -> acc
+          end
+        end)
+
+      _ ->
+        0
+    end
+  end
 
   @doc """
   Alias for update/2 for consistency with LiveView naming.
@@ -1397,24 +1626,30 @@ defmodule PhoenixKitEntities.EntityData do
   end
 
   @doc """
-  Bulk deletes multiple records by UUIDs.
+  Bulk hard-deletes records by UUIDs.
 
-  Returns a tuple with the count of deleted records and nil. Logs a
-  single `entity_data.bulk_deleted` activity row carrying the count
-  (not the uuids — they're already gone, and listing them in metadata
-  bloats the audit row).
+  Prefer `bulk_trash/2` for soft-delete. Use this for emptying-the-trash
+  flows where the records are confirmed unreferenced.
+
+  Catches `Postgrex.Error` for FK / NOT NULL violations and returns
+  `{:error, :referenced_by_external}` so the admin UI can flash a
+  friendly message rather than 500. The transaction rolls back on this
+  error — no records are deleted.
 
   ## Options
 
     * `:actor_uuid` — UUID of the user performing the bulk delete.
-      Threaded through to the activity log entry.
 
   ## Examples
 
       iex> PhoenixKitEntities.EntityData.bulk_delete(["uuid1", "uuid2"], actor_uuid: admin.uuid)
       {2, nil}
+
+      iex> PhoenixKitEntities.EntityData.bulk_delete([referenced_uuid])
+      {:error, :referenced_by_external}
   """
-  @spec bulk_delete([String.t()], keyword()) :: {non_neg_integer(), nil}
+  @spec bulk_delete([String.t()], keyword()) ::
+          {non_neg_integer(), nil} | {:error, :referenced_by_external}
   def bulk_delete(uuids, opts \\ []) when is_list(uuids) do
     {count, _} =
       result =
@@ -1433,13 +1668,104 @@ defmodule PhoenixKitEntities.EntityData do
     })
 
     result
+  rescue
+    e in Postgrex.Error ->
+      if foreign_key_or_not_null_violation?(e) do
+        log_data_error_activity(:bulk_deleted, opts)
+        {:error, :referenced_by_external}
+      else
+        reraise e, __STACKTRACE__
+      end
+  end
+
+  @doc """
+  Bulk soft-deletes records by setting their status to `"trashed"`.
+
+  Returns `{count, nil}` for the number of records actually trashed
+  (already-trashed records are skipped via the WHERE clause). Logs a
+  single `entity_data.bulk_trashed` row.
+
+  ## Examples
+
+      iex> EntityData.bulk_trash(["uuid1", "uuid2"], actor_uuid: admin.uuid)
+      {2, nil}
+  """
+  @spec bulk_trash([String.t()], keyword()) :: {non_neg_integer(), nil}
+  def bulk_trash(uuids, opts \\ []) when is_list(uuids) do
+    now = UtilsDate.utc_now()
+
+    {count, _} =
+      result =
+      from(d in __MODULE__,
+        where: d.uuid in ^uuids and d.status != ^@soft_delete_status
+      )
+      |> repo().update_all(set: [status: @soft_delete_status, date_updated: now])
+
+    PhoenixKitEntities.ActivityLog.log(%{
+      action: "entity_data.bulk_trashed",
+      mode: "manual",
+      actor_uuid: Keyword.get(opts, :actor_uuid),
+      resource_type: "entity_data",
+      metadata: %{"count" => count, "uuid_count" => length(uuids)}
+    })
+
+    # Broadcast per affected entity so any LV viewing those records refreshes.
+    broadcast_bulk_change(uuids)
+
+    result
+  end
+
+  @doc """
+  Bulk restores trashed records to `"published"` status.
+
+  Only rows currently `"trashed"` are touched. Logs
+  `entity_data.bulk_restored` with the affected count.
+
+  ## Examples
+
+      iex> EntityData.bulk_restore_from_trash(["uuid1", "uuid2"], actor_uuid: admin.uuid)
+      {2, nil}
+  """
+  @spec bulk_restore_from_trash([String.t()], keyword()) :: {non_neg_integer(), nil}
+  def bulk_restore_from_trash(uuids, opts \\ []) when is_list(uuids) do
+    now = UtilsDate.utc_now()
+
+    {count, _} =
+      result =
+      from(d in __MODULE__,
+        where: d.uuid in ^uuids and d.status == ^@soft_delete_status
+      )
+      |> repo().update_all(set: [status: "published", date_updated: now])
+
+    PhoenixKitEntities.ActivityLog.log(%{
+      action: "entity_data.bulk_restored",
+      mode: "manual",
+      actor_uuid: Keyword.get(opts, :actor_uuid),
+      resource_type: "entity_data",
+      metadata: %{"count" => count, "uuid_count" => length(uuids)}
+    })
+
+    broadcast_bulk_change(uuids)
+
+    result
+  end
+
+  # Look up the entity_uuid for each affected row and broadcast a
+  # data_updated event per (entity, record) pair so any open LV refreshes.
+  defp broadcast_bulk_change(uuids) when is_list(uuids) do
+    from(d in __MODULE__, where: d.uuid in ^uuids, select: {d.entity_uuid, d.uuid})
+    |> repo().all()
+    |> Enum.each(fn {entity_uuid, uuid} ->
+      Events.broadcast_data_updated(entity_uuid, uuid)
+    end)
   end
 
   @doc """
   Gets statistical data about entity data records.
 
-  Returns statistics about total records, published, draft, and archived counts.
-  Optionally filters by entity_uuid if provided.
+  `total_records` is the count of *non-trashed* records (the visible
+  total). `trashed_records` is reported separately so the admin can
+  surface the trash-bin badge.
 
   ## Examples
 
@@ -1448,25 +1774,19 @@ defmodule PhoenixKitEntities.EntityData do
         total_records: 150,
         published_records: 120,
         draft_records: 25,
-        archived_records: 5
-      }
-
-      iex> PhoenixKitEntities.EntityData.get_data_stats("018e3c4a-9f6b-7890-abcd-ef1234567890")
-      %{
-        total_records: 15,
-        published_records: 12,
-        draft_records: 2,
-        archived_records: 1
+        archived_records: 5,
+        trashed_records: 3
       }
   """
   def get_data_stats(entity_uuid \\ nil) do
     query =
       from(d in __MODULE__,
         select: {
-          count(d.uuid),
+          count(fragment("CASE WHEN ? <> 'trashed' THEN 1 END", d.status)),
           count(fragment("CASE WHEN ? = 'published' THEN 1 END", d.status)),
           count(fragment("CASE WHEN ? = 'draft' THEN 1 END", d.status)),
-          count(fragment("CASE WHEN ? = 'archived' THEN 1 END", d.status))
+          count(fragment("CASE WHEN ? = 'archived' THEN 1 END", d.status)),
+          count(fragment("CASE WHEN ? = 'trashed' THEN 1 END", d.status))
         }
       )
 
@@ -1479,13 +1799,14 @@ defmodule PhoenixKitEntities.EntityData do
           from(d in query, where: d.entity_uuid == ^uuid)
       end
 
-    {total, published, draft, archived} = repo().one(query)
+    {total, published, draft, archived, trashed} = repo().one(query)
 
     %{
       total_records: total,
       published_records: published,
       draft_records: draft,
-      archived_records: archived
+      archived_records: archived,
+      trashed_records: trashed
     }
   end
 

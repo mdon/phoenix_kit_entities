@@ -1,11 +1,13 @@
 defmodule PhoenixKitEntities.Web.DataNavigatorLiveTest do
   use PhoenixKitEntities.LiveCase, async: false
 
+  alias Ecto.Adapters.SQL
+  alias Ecto.UUID
   alias PhoenixKitEntities, as: Entities
   alias PhoenixKitEntities.EntityData
 
   setup do
-    actor_uuid = Ecto.UUID.generate()
+    actor_uuid = UUID.generate()
 
     {:ok, entity} =
       Entities.create_entity(
@@ -135,7 +137,10 @@ defmodule PhoenixKitEntities.Web.DataNavigatorLiveTest do
       )
     end
 
-    test "bulk delete logs ONE bulk_deleted row", %{conn: conn} = ctx do
+    test "bulk delete (soft) logs ONE bulk_trashed row", %{conn: conn} = ctx do
+      # The "delete" bulk action is now a soft-delete (trash) — the row stays
+      # alive so parent-app FK references resolve. Hard-delete moved to the
+      # "permanent_delete" action, available from the Trash filter view.
       conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
       {:ok, view, _html} = live(conn, navigator_url(ctx.entity))
 
@@ -145,7 +150,7 @@ defmodule PhoenixKitEntities.Web.DataNavigatorLiveTest do
 
       render_hook(view, "bulk_action", %{"action" => "delete"})
 
-      assert_activity_logged("entity_data.bulk_deleted",
+      assert_activity_logged("entity_data.bulk_trashed",
         actor_uuid: ctx.actor_uuid,
         metadata_has: %{"count" => 3, "uuid_count" => 3}
       )
@@ -377,6 +382,320 @@ defmodule PhoenixKitEntities.Web.DataNavigatorLiveTest do
     end
   end
 
+  describe "trash_data / restore_from_trash / permanent_delete (issue #12)" do
+    test "trash_data soft-deletes — row stays alive, status flips to trashed",
+         %{conn: conn} = ctx do
+      [record | _] = ctx.records
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, navigator_url(ctx.entity))
+
+      render_hook(view, "trash_data", %{"uuid" => record.uuid})
+
+      assert_activity_logged("entity_data.trashed",
+        actor_uuid: ctx.actor_uuid,
+        resource_uuid: record.uuid
+      )
+
+      assert render(view) =~ "moved to trash"
+      assert EntityData.get(record.uuid).status == "trashed"
+    end
+
+    test "restore_from_trash flips trashed → published",
+         %{conn: conn} = ctx do
+      [record | _] = ctx.records
+      {:ok, _} = EntityData.trash(record, actor_uuid: ctx.actor_uuid)
+
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, navigator_url(ctx.entity, status: "trashed"))
+
+      render_hook(view, "restore_from_trash", %{"uuid" => record.uuid})
+
+      assert_activity_logged("entity_data.restored",
+        actor_uuid: ctx.actor_uuid,
+        resource_uuid: record.uuid
+      )
+
+      assert render(view) =~ "restored from trash"
+      assert EntityData.get(record.uuid).status == "published"
+    end
+
+    test "permanent_delete hard-deletes when no parent FK references", %{conn: conn} = ctx do
+      [record | _] = ctx.records
+      {:ok, _} = EntityData.trash(record, actor_uuid: ctx.actor_uuid)
+
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, navigator_url(ctx.entity, status: "trashed"))
+
+      render_hook(view, "permanent_delete", %{"uuid" => record.uuid})
+
+      assert render(view) =~ "permanently deleted"
+      refute EntityData.get(record.uuid)
+    end
+
+    test "permanent_delete flashes a friendly message on FK violation, row stays",
+         %{conn: conn} = ctx do
+      [record | _] = ctx.records
+      {:ok, _} = EntityData.trash(record, actor_uuid: ctx.actor_uuid)
+
+      SQL.query!(repo(), """
+      CREATE TABLE _dn_test_parent (
+        id serial primary key,
+        status_uuid uuid NOT NULL REFERENCES phoenix_kit_entity_data(uuid) ON DELETE RESTRICT
+      )
+      """)
+
+      SQL.query!(
+        repo(),
+        "INSERT INTO _dn_test_parent (status_uuid) VALUES ($1)",
+        [UUID.dump!(record.uuid)]
+      )
+
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, navigator_url(ctx.entity, status: "trashed"))
+
+      render_hook(view, "permanent_delete", %{"uuid" => record.uuid})
+
+      assert render(view) =~ "referenced by other tables"
+      # Row still exists — soft-delete fallback path.
+      assert %EntityData{status: "trashed"} = EntityData.get(record.uuid)
+    end
+
+    test "bulk_action 'permanent_delete' hard-deletes selected trashed records",
+         %{conn: conn} = ctx do
+      [r1, r2, _r3] = ctx.records
+      {:ok, _} = EntityData.trash(r1, actor_uuid: ctx.actor_uuid)
+      {:ok, _} = EntityData.trash(r2, actor_uuid: ctx.actor_uuid)
+
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, navigator_url(ctx.entity, status: "trashed"))
+
+      render_hook(view, "toggle_select", %{"uuid" => r1.uuid})
+      render_hook(view, "toggle_select", %{"uuid" => r2.uuid})
+      render_hook(view, "bulk_action", %{"action" => "permanent_delete"})
+
+      assert render(view) =~ "permanently deleted"
+      refute EntityData.get(r1.uuid)
+      refute EntityData.get(r2.uuid)
+    end
+
+    test "bulk_action 'restore_from_trash' flips selected trashed → published",
+         %{conn: conn} = ctx do
+      [r1, r2, _] = ctx.records
+      {:ok, _} = EntityData.trash(r1, actor_uuid: ctx.actor_uuid)
+      {:ok, _} = EntityData.trash(r2, actor_uuid: ctx.actor_uuid)
+
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, navigator_url(ctx.entity, status: "trashed"))
+
+      render_hook(view, "toggle_select", %{"uuid" => r1.uuid})
+      render_hook(view, "toggle_select", %{"uuid" => r2.uuid})
+      render_hook(view, "bulk_action", %{"action" => "restore_from_trash"})
+
+      assert_activity_logged("entity_data.bulk_restored",
+        actor_uuid: ctx.actor_uuid,
+        metadata_has: %{"count" => 2}
+      )
+
+      assert render(view) =~ "restored from trash"
+      assert EntityData.get(r1.uuid).status == "published"
+      assert EntityData.get(r2.uuid).status == "published"
+    end
+
+    test "trash_data on already-trashed record shows :info flash, not error",
+         %{conn: conn} = ctx do
+      [record | _] = ctx.records
+      {:ok, _} = EntityData.trash(record, actor_uuid: ctx.actor_uuid)
+
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, navigator_url(ctx.entity, status: "trashed"))
+
+      render_hook(view, "trash_data", %{"uuid" => record.uuid})
+      assert render(view) =~ "already in the trash"
+    end
+
+    test "restore_from_trash on non-trashed record shows :info flash",
+         %{conn: conn} = ctx do
+      [record | _] = ctx.records
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, navigator_url(ctx.entity))
+
+      render_hook(view, "restore_from_trash", %{"uuid" => record.uuid})
+      assert render(view) =~ "not in the trash"
+    end
+
+    test "trash_data refused for non-admin scope", %{conn: conn} = ctx do
+      [record | _] = ctx.records
+
+      conn =
+        put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid, roles: [], permissions: []))
+
+      {:ok, view, _html} = live(conn, navigator_url(ctx.entity))
+
+      render_hook(view, "trash_data", %{"uuid" => record.uuid})
+
+      assert render(view) =~ "Not authorized"
+      # Row unchanged.
+      assert EntityData.get(record.uuid).status == "published"
+    end
+
+    test "restore_from_trash refused for non-admin scope", %{conn: conn} = ctx do
+      [record | _] = ctx.records
+      {:ok, _} = EntityData.trash(record, actor_uuid: ctx.actor_uuid)
+
+      conn =
+        put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid, roles: [], permissions: []))
+
+      {:ok, view, _html} = live(conn, navigator_url(ctx.entity, status: "trashed"))
+
+      render_hook(view, "restore_from_trash", %{"uuid" => record.uuid})
+
+      assert render(view) =~ "Not authorized"
+      assert EntityData.get(record.uuid).status == "trashed"
+    end
+
+    test "permanent_delete refused for non-admin scope", %{conn: conn} = ctx do
+      [record | _] = ctx.records
+      {:ok, _} = EntityData.trash(record, actor_uuid: ctx.actor_uuid)
+
+      conn =
+        put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid, roles: [], permissions: []))
+
+      {:ok, view, _html} = live(conn, navigator_url(ctx.entity, status: "trashed"))
+
+      render_hook(view, "permanent_delete", %{"uuid" => record.uuid})
+
+      assert render(view) =~ "Not authorized"
+      assert %EntityData{} = EntityData.get(record.uuid)
+    end
+
+    test "bulk_action 'permanent_delete' with empty selection flashes error",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, navigator_url(ctx.entity, status: "trashed"))
+
+      render_hook(view, "bulk_action", %{"action" => "permanent_delete"})
+
+      assert render(view) =~ "No records selected"
+    end
+
+    test "bulk_action 'restore_from_trash' with empty selection flashes error",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, navigator_url(ctx.entity, status: "trashed"))
+
+      render_hook(view, "bulk_action", %{"action" => "restore_from_trash"})
+
+      assert render(view) =~ "No records selected"
+    end
+
+    test "bulk_action 'trash' with empty selection flashes error",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, navigator_url(ctx.entity))
+
+      render_hook(view, "bulk_action", %{"action" => "trash"})
+
+      assert render(view) =~ "No records selected"
+    end
+
+    test "bulk_action 'permanent_delete' refused for non-admin scope",
+         %{conn: conn} = ctx do
+      conn =
+        put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid, roles: [], permissions: []))
+
+      {:ok, view, _html} = live(conn, navigator_url(ctx.entity, status: "trashed"))
+
+      render_hook(view, "bulk_action", %{"action" => "permanent_delete"})
+
+      assert render(view) =~ "Not authorized"
+    end
+
+    test "Trash filter option appears in status dropdown (UI structure)",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, _view, html} = live(conn, navigator_url(ctx.entity))
+
+      assert html =~ ~s(<option value="trashed")
+      assert html =~ "Trash"
+    end
+
+    test "Trash filter option shows count badge when trashed_records > 0",
+         %{conn: conn} = ctx do
+      [record | _] = ctx.records
+      {:ok, _} = EntityData.trash(record, actor_uuid: ctx.actor_uuid)
+
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, _view, html} = live(conn, navigator_url(ctx.entity))
+
+      # The dropdown option text includes "(N)" when trashed_records is non-zero.
+      assert html =~ ~r/Trash\s*\(1\)/
+    end
+
+    test "viewing the Trash filter shows Restore + Delete-forever bulk buttons",
+         %{conn: conn} = ctx do
+      [record | _] = ctx.records
+      {:ok, _} = EntityData.trash(record, actor_uuid: ctx.actor_uuid)
+
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, navigator_url(ctx.entity, status: "trashed"))
+
+      # Select the trashed row so the bulk bar renders.
+      render_hook(view, "toggle_select", %{"uuid" => record.uuid})
+      html = render(view)
+
+      assert html =~ ~s(phx-value-action="restore_from_trash")
+      assert html =~ ~s(phx-value-action="permanent_delete")
+      # The non-trash views' Trash button should NOT appear.
+      refute html =~ ~s(phx-value-action="trash")
+    end
+
+    test "non-trash view's bulk bar shows Trash but NOT Permanent-delete",
+         %{conn: conn} = ctx do
+      [record | _] = ctx.records
+
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, navigator_url(ctx.entity))
+
+      render_hook(view, "toggle_select", %{"uuid" => record.uuid})
+      html = render(view)
+
+      assert html =~ ~s(phx-value-action="trash")
+      refute html =~ ~s(phx-value-action="permanent_delete")
+      refute html =~ ~s(phx-value-action="restore_from_trash")
+    end
+  end
+
+  describe "status helpers (status_badge_class / status_label / status_icon)" do
+    alias PhoenixKitEntities.Web.DataNavigator
+
+    test "trashed sentinel renders as the error badge with the trash icon" do
+      assert DataNavigator.status_badge_class("trashed") == "badge-error"
+      assert DataNavigator.status_icon("trashed") == "hero-trash"
+      assert DataNavigator.status_label("trashed") == "Trashed"
+    end
+
+    test "existing statuses still resolve" do
+      assert DataNavigator.status_badge_class("published") == "badge-success"
+      assert DataNavigator.status_badge_class("draft") == "badge-warning"
+      assert DataNavigator.status_badge_class("archived") == "badge-neutral"
+    end
+  end
+
+  describe "toggle_status preserves trashed status (does NOT cycle to published)" do
+    test "toggle_status on a trashed record is a no-op", %{conn: conn} = ctx do
+      [record | _] = ctx.records
+      {:ok, _} = EntityData.trash(record, actor_uuid: ctx.actor_uuid)
+
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, navigator_url(ctx.entity, status: "trashed"))
+
+      render_hook(view, "toggle_status", %{"uuid" => record.uuid})
+
+      # Status MUST NOT cycle out of trashed. Restore is the only escape.
+      assert EntityData.get(record.uuid).status == "trashed"
+    end
+  end
+
   describe "reorder_records (drag-and-drop)" do
     test "reorders records and refreshes the list",
          %{conn: conn} = ctx do
@@ -440,4 +759,6 @@ defmodule PhoenixKitEntities.Web.DataNavigatorLiveTest do
       status -> base <> "?status=#{status}"
     end
   end
+
+  defp repo, do: PhoenixKit.RepoHelper.repo()
 end

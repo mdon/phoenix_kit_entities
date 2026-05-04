@@ -27,6 +27,20 @@ defmodule PhoenixKitEntities.ErrorsTest do
     test ":unexpected" do
       assert Errors.message(:unexpected) == "An unexpected error occurred."
     end
+
+    test ":already_trashed" do
+      assert Errors.message(:already_trashed) == "This record is already in the trash."
+    end
+
+    test ":not_trashed" do
+      assert Errors.message(:not_trashed) == "This record is not in the trash."
+    end
+
+    test ":referenced_by_external surfaces a friendly explanation of the FK violation" do
+      msg = Errors.message(:referenced_by_external)
+      assert msg =~ "Cannot permanently delete"
+      assert msg =~ "referenced by other tables"
+    end
   end
 
   describe "message/1 tagged tuples" do
