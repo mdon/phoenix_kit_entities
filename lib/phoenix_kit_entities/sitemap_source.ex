@@ -138,15 +138,25 @@ defmodule PhoenixKitEntities.SitemapSource do
       nil
     end
   rescue
-    _ -> nil
+    error ->
+      Logger.warning("Sitemap: failed to build sub_sitemaps for entities: #{inspect(error)}")
+      nil
   end
 
+  # Defensive boot resilience — `enabled?/0` runs from sitemap generation
+  # paths that may execute before the DB is fully up (e.g. host-app boot
+  # scripts or cold cache scenarios). The rescue covers DB-availability
+  # exceptions; the `catch :exit, _` matches the canonical shape in
+  # `phoenix_kit_entities.ex:enabled?/0` for sandbox-shutdown signals
+  # that don't surface as exceptions.
   @impl true
   @spec enabled?() :: boolean()
   def enabled? do
     PhoenixKitEntities.enabled?()
   rescue
     _ -> false
+  catch
+    :exit, _ -> false
   end
 
   @impl true

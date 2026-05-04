@@ -44,6 +44,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
       |> assign(:published_records, 0)
       |> assign(:draft_records, 0)
       |> assign(:archived_records, 0)
+      |> assign(:trashed_records, 0)
       |> assign(:selected_entity, nil)
       |> assign(:selected_entity_uuid, nil)
       |> assign(:selected_status, "all")
@@ -139,6 +140,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
     |> assign(:published_records, stats.published_records)
     |> assign(:draft_records, stats.draft_records)
     |> assign(:archived_records, stats.archived_records)
+    |> assign(:trashed_records, stats.trashed_records)
   end
 
   @impl true
@@ -297,15 +299,93 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
     end
   end
 
+  def handle_event("trash_data", %{"uuid" => uuid}, socket) do
+    if Scope.admin?(socket.assigns.phoenix_kit_current_scope) do
+      data_record = EntityData.get!(uuid)
+
+      case EntityData.trash(data_record, actor_opts(socket)) do
+        {:ok, _data} ->
+          {:noreply,
+           socket
+           |> refresh_data_stats()
+           |> apply_filters()
+           |> put_flash(
+             :info,
+             gettext("Record moved to trash. Restore it before %{days} days to keep it.",
+               days: 90
+             )
+           )}
+
+        {:error, :already_trashed} ->
+          {:noreply, put_flash(socket, :info, gettext("Record is already in the trash"))}
+
+        {:error, _changeset} ->
+          {:noreply, put_flash(socket, :error, gettext("Failed to trash record"))}
+      end
+    else
+      {:noreply, put_flash(socket, :error, gettext("Not authorized"))}
+    end
+  end
+
+  def handle_event("restore_from_trash", %{"uuid" => uuid}, socket) do
+    if Scope.admin?(socket.assigns.phoenix_kit_current_scope) do
+      data_record = EntityData.get!(uuid)
+
+      case EntityData.restore_from_trash(data_record, actor_opts(socket)) do
+        {:ok, _data} ->
+          {:noreply,
+           socket
+           |> refresh_data_stats()
+           |> apply_filters()
+           |> put_flash(:info, gettext("Record restored from trash"))}
+
+        {:error, :not_trashed} ->
+          {:noreply, put_flash(socket, :info, gettext("Record is not in the trash"))}
+
+        {:error, _changeset} ->
+          {:noreply, put_flash(socket, :error, gettext("Failed to restore record"))}
+      end
+    else
+      {:noreply, put_flash(socket, :error, gettext("Not authorized"))}
+    end
+  end
+
+  def handle_event("permanent_delete", %{"uuid" => uuid}, socket) do
+    if Scope.admin?(socket.assigns.phoenix_kit_current_scope) do
+      data_record = EntityData.get!(uuid)
+
+      case EntityData.delete(data_record, actor_opts(socket)) do
+        {:ok, _data} ->
+          {:noreply,
+           socket
+           |> refresh_data_stats()
+           |> apply_filters()
+           |> put_flash(:info, gettext("Record permanently deleted"))}
+
+        {:error, :referenced_by_external} ->
+          {:noreply,
+           put_flash(socket, :error, PhoenixKitEntities.Errors.message(:referenced_by_external))}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, gettext("Failed to delete record"))}
+      end
+    else
+      {:noreply, put_flash(socket, :error, gettext("Not authorized"))}
+    end
+  end
+
   def handle_event("toggle_status", %{"uuid" => uuid}, socket) do
     if Scope.admin?(socket.assigns.phoenix_kit_current_scope) do
       data_record = EntityData.get!(uuid)
 
+      # Trashed records are excluded from the cycle — restore them
+      # explicitly via the dedicated Restore button instead.
       new_status =
         case data_record.status do
           "draft" -> "published"
           "published" -> "archived"
           "archived" -> "draft"
+          "trashed" -> "trashed"
         end
 
       case EntityData.update_data(data_record, %{status: new_status}, actor_opts(socket)) do
@@ -417,24 +497,66 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
     end
   end
 
+  # Bulk "delete" is a soft-delete (trash) — keeps rows alive so parent-app
+  # FK references stay valid. Use the "permanent_delete" action below from
+  # the Trash filter view to actually remove rows.
   def handle_event("bulk_action", %{"action" => "delete"}, socket) do
+    handle_event("bulk_action", %{"action" => "trash"}, socket)
+  end
+
+  def handle_event("bulk_action", %{"action" => "trash"}, socket) do
     if Scope.admin?(socket.assigns.phoenix_kit_current_scope) do
       uuids = socket.assigns.selected_uuids
 
       if MapSet.size(uuids) == 0 do
         {:noreply, put_flash(socket, :error, gettext("No records selected"))}
       else
-        {count, _} = EntityData.bulk_delete(MapSet.to_list(uuids), actor_opts(socket))
+        {count, _} = EntityData.bulk_trash(MapSet.to_list(uuids), actor_opts(socket))
 
         {:noreply,
          socket
          |> assign(:selected_uuids, MapSet.new())
          |> refresh_data_stats()
          |> apply_filters()
-         |> put_flash(:info, gettext("%{count} records deleted", count: count))}
+         |> put_flash(:info, gettext("%{count} records moved to trash", count: count))}
       end
     else
       {:noreply, put_flash(socket, :error, gettext("Not authorized"))}
+    end
+  end
+
+  def handle_event("bulk_action", %{"action" => "restore_from_trash"}, socket) do
+    if Scope.admin?(socket.assigns.phoenix_kit_current_scope) do
+      uuids = socket.assigns.selected_uuids
+
+      if MapSet.size(uuids) == 0 do
+        {:noreply, put_flash(socket, :error, gettext("No records selected"))}
+      else
+        {count, _} =
+          EntityData.bulk_restore_from_trash(MapSet.to_list(uuids), actor_opts(socket))
+
+        {:noreply,
+         socket
+         |> assign(:selected_uuids, MapSet.new())
+         |> refresh_data_stats()
+         |> apply_filters()
+         |> put_flash(:info, gettext("%{count} records restored from trash", count: count))}
+      end
+    else
+      {:noreply, put_flash(socket, :error, gettext("Not authorized"))}
+    end
+  end
+
+  def handle_event("bulk_action", %{"action" => "permanent_delete"}, socket) do
+    cond do
+      not Scope.admin?(socket.assigns.phoenix_kit_current_scope) ->
+        {:noreply, put_flash(socket, :error, gettext("Not authorized"))}
+
+      MapSet.size(socket.assigns.selected_uuids) == 0 ->
+        {:noreply, put_flash(socket, :error, gettext("No records selected"))}
+
+      true ->
+        do_bulk_permanent_delete(socket)
     end
   end
 
@@ -457,6 +579,24 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
       end
     else
       {:noreply, put_flash(socket, :error, gettext("Not authorized"))}
+    end
+  end
+
+  defp do_bulk_permanent_delete(socket) do
+    uuids = socket.assigns.selected_uuids
+
+    case EntityData.bulk_delete(MapSet.to_list(uuids), actor_opts(socket)) do
+      {count, _} when is_integer(count) ->
+        {:noreply,
+         socket
+         |> assign(:selected_uuids, MapSet.new())
+         |> refresh_data_stats()
+         |> apply_filters()
+         |> put_flash(:info, gettext("%{count} records permanently deleted", count: count))}
+
+      {:error, :referenced_by_external} ->
+        {:noreply,
+         put_flash(socket, :error, PhoenixKitEntities.Errors.message(:referenced_by_external))}
     end
   end
 
@@ -659,10 +799,14 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
 
   # When an entity is selected, use sort-mode-aware queries
   defp fetch_records(nil, "all", _opts), do: EntityData.list_all_data()
+  defp fetch_records(nil, "trashed", _opts), do: EntityData.list_data_by_status("trashed")
   defp fetch_records(nil, status, _opts), do: EntityData.list_data_by_status(status)
 
   defp fetch_records(entity_uuid, "all", opts),
     do: EntityData.list_by_entity(entity_uuid, opts)
+
+  defp fetch_records(entity_uuid, "trashed", opts),
+    do: EntityData.list_trashed_by_entity(entity_uuid, opts)
 
   defp fetch_records(entity_uuid, status, opts),
     do: EntityData.list_by_entity_and_status(entity_uuid, status, opts)
@@ -688,6 +832,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
     |> assign(:published_records, stats.published_records)
     |> assign(:draft_records, stats.draft_records)
     |> assign(:archived_records, stats.archived_records)
+    |> assign(:trashed_records, stats.trashed_records)
   end
 
   defp refresh_entities_and_data(socket) do
@@ -704,6 +849,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
       "published" -> "badge-success"
       "draft" -> "badge-warning"
       "archived" -> "badge-neutral"
+      "trashed" -> "badge-error"
       _ -> "badge-outline"
     end
   end
@@ -713,6 +859,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
       "published" -> gettext("Published")
       "draft" -> gettext("Draft")
       "archived" -> gettext("Archived")
+      "trashed" -> gettext("Trashed")
       _ -> gettext("Unknown")
     end
   end
@@ -722,6 +869,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
       "published" -> "hero-check-circle"
       "draft" -> "hero-pencil"
       "archived" -> "hero-archive-box"
+      "trashed" -> "hero-trash"
       _ -> "hero-question-mark-circle"
     end
   end
@@ -962,6 +1110,9 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                       <option value="archived" selected={@selected_status == "archived"}>
                         {gettext("Archived")}
                       </option>
+                      <option value="trashed" selected={@selected_status == "trashed"}>
+                        {gettext("Trash")}{if @trashed_records > 0, do: " (#{@trashed_records})", else: ""}
+                      </option>
                     </select>
                   </label>
                 </.form>
@@ -1008,32 +1159,63 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                 </span>
                 <div class="divider divider-horizontal mx-0"></div>
                 <%!-- Quick Actions --%>
-                <button
-                  phx-click="bulk_action"
-                  phx-value-action="archive"
-                  class="btn btn-warning btn-sm"
-                >
-                  <.icon name="hero-archive-box" class="w-4 h-4" /> {gettext("Archive")}
-                </button>
-                <button
-                  phx-click="bulk_action"
-                  phx-value-action="restore"
-                  class="btn btn-success btn-sm"
-                >
-                  <.icon name="hero-arrow-path" class="w-4 h-4" /> {gettext("Restore")}
-                </button>
-                <button
-                  phx-click="bulk_action"
-                  phx-value-action="delete"
-                  class="btn btn-error btn-sm"
-                  data-confirm={
-                    gettext("Are you sure you want to delete %{count} records?",
-                      count: MapSet.size(@selected_uuids)
-                    )
-                  }
-                >
-                  <.icon name="hero-trash" class="w-4 h-4" /> {gettext("Delete")}
-                </button>
+                <%= if @selected_status == "trashed" do %>
+                  <%!-- Trash-bin actions: restore or permanently delete --%>
+                  <button
+                    phx-click="bulk_action"
+                    phx-value-action="restore_from_trash"
+                    phx-disable-with={gettext("…")}
+                    class="btn btn-success btn-sm"
+                  >
+                    <.icon name="hero-arrow-uturn-left" class="w-4 h-4" /> {gettext("Restore")}
+                  </button>
+                  <button
+                    phx-click="bulk_action"
+                    phx-value-action="permanent_delete"
+                    phx-disable-with={gettext("…")}
+                    class="btn btn-error btn-sm"
+                    data-confirm={
+                      gettext(
+                        "Permanently delete %{count} records? This cannot be undone, and will fail if any are still referenced by other tables.",
+                        count: MapSet.size(@selected_uuids)
+                      )
+                    }
+                  >
+                    <.icon name="hero-x-circle" class="w-4 h-4" />
+                    {gettext("Delete forever")}
+                  </button>
+                <% else %>
+                  <button
+                    phx-click="bulk_action"
+                    phx-value-action="archive"
+                    phx-disable-with={gettext("…")}
+                    class="btn btn-warning btn-sm"
+                  >
+                    <.icon name="hero-archive-box" class="w-4 h-4" /> {gettext("Archive")}
+                  </button>
+                  <button
+                    phx-click="bulk_action"
+                    phx-value-action="restore"
+                    phx-disable-with={gettext("…")}
+                    class="btn btn-success btn-sm"
+                  >
+                    <.icon name="hero-arrow-path" class="w-4 h-4" /> {gettext("Restore")}
+                  </button>
+                  <button
+                    phx-click="bulk_action"
+                    phx-value-action="trash"
+                    phx-disable-with={gettext("…")}
+                    class="btn btn-error btn-sm"
+                    data-confirm={
+                      gettext(
+                        "Move %{count} records to the trash? Restore from the Trash filter if needed.",
+                        count: MapSet.size(@selected_uuids)
+                      )
+                    }
+                  >
+                    <.icon name="hero-trash" class="w-4 h-4" /> {gettext("Trash")}
+                  </button>
+                <% end %>
 
                 <div class="divider divider-horizontal mx-0"></div>
 
@@ -1053,6 +1235,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                         phx-click="bulk_action"
                         phx-value-action="change_status"
                         phx-value-status="published"
+                        phx-disable-with={gettext("…")}
                       >
                         {gettext("Published")}
                       </a>
@@ -1062,6 +1245,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                         phx-click="bulk_action"
                         phx-value-action="change_status"
                         phx-value-status="draft"
+                        phx-disable-with={gettext("…")}
                       >
                         {gettext("Draft")}
                       </a>
@@ -1071,6 +1255,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                         phx-click="bulk_action"
                         phx-value-action="change_status"
                         phx-value-status="archived"
+                        phx-disable-with={gettext("…")}
                       >
                         {gettext("Archived")}
                       </a>
@@ -1322,28 +1507,75 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                           <.icon name="hero-pencil" class="w-4 h-4 hidden sm:inline" />
                           <span class="sm:hidden whitespace-nowrap">{gettext("Edit")}</span>
                         </.link>
-                        <%= if data_record.status == "archived" do %>
-                          <button
-                            class="btn btn-outline btn-xs text-success tooltip tooltip-bottom"
-                            phx-click="restore_data"
-                            phx-value-uuid={data_record.uuid}
-                            phx-disable-with={gettext("…")}
-                            data-tip={gettext("Restore")}
-                          >
-                            <.icon name="hero-arrow-path" class="w-4 h-4 hidden sm:inline" />
-                            <span class="sm:hidden whitespace-nowrap">{gettext("Restore")}</span>
-                          </button>
-                        <% else %>
-                          <button
-                            class="btn btn-outline btn-xs text-error tooltip tooltip-bottom"
-                            phx-click="archive_data"
-                            phx-value-uuid={data_record.uuid}
-                            phx-disable-with={gettext("…")}
-                            data-tip={gettext("Archive")}
-                          >
-                            <.icon name="hero-trash" class="w-4 h-4 hidden sm:inline" />
-                            <span class="sm:hidden whitespace-nowrap">{gettext("Archive")}</span>
-                          </button>
+                        <%= cond do %>
+                          <% data_record.status == "trashed" -> %>
+                            <button
+                              class="btn btn-outline btn-xs text-success tooltip tooltip-bottom"
+                              phx-click="restore_from_trash"
+                              phx-value-uuid={data_record.uuid}
+                              phx-disable-with={gettext("…")}
+                              data-tip={gettext("Restore from trash")}
+                            >
+                              <.icon name="hero-arrow-uturn-left" class="w-4 h-4 hidden sm:inline" />
+                              <span class="sm:hidden whitespace-nowrap">{gettext("Restore")}</span>
+                            </button>
+                            <button
+                              class="btn btn-outline btn-xs text-error tooltip tooltip-bottom"
+                              phx-click="permanent_delete"
+                              phx-value-uuid={data_record.uuid}
+                              phx-disable-with={gettext("…")}
+                              data-tip={gettext("Delete forever")}
+                              data-confirm={
+                                gettext(
+                                  "Permanently delete this record? This cannot be undone, and will fail if it's still referenced by other tables."
+                                )
+                              }
+                            >
+                              <.icon name="hero-x-circle" class="w-4 h-4 hidden sm:inline" />
+                              <span class="sm:hidden whitespace-nowrap">{gettext("Delete")}</span>
+                            </button>
+                          <% data_record.status == "archived" -> %>
+                            <button
+                              class="btn btn-outline btn-xs text-success tooltip tooltip-bottom"
+                              phx-click="restore_data"
+                              phx-value-uuid={data_record.uuid}
+                              phx-disable-with={gettext("…")}
+                              data-tip={gettext("Restore")}
+                            >
+                              <.icon name="hero-arrow-path" class="w-4 h-4 hidden sm:inline" />
+                              <span class="sm:hidden whitespace-nowrap">{gettext("Restore")}</span>
+                            </button>
+                            <button
+                              class="btn btn-outline btn-xs text-error tooltip tooltip-bottom"
+                              phx-click="trash_data"
+                              phx-value-uuid={data_record.uuid}
+                              phx-disable-with={gettext("…")}
+                              data-tip={gettext("Move to trash")}
+                            >
+                              <.icon name="hero-trash" class="w-4 h-4 hidden sm:inline" />
+                              <span class="sm:hidden whitespace-nowrap">{gettext("Trash")}</span>
+                            </button>
+                          <% true -> %>
+                            <button
+                              class="btn btn-outline btn-xs text-warning tooltip tooltip-bottom"
+                              phx-click="archive_data"
+                              phx-value-uuid={data_record.uuid}
+                              phx-disable-with={gettext("…")}
+                              data-tip={gettext("Archive")}
+                            >
+                              <.icon name="hero-archive-box" class="w-4 h-4 hidden sm:inline" />
+                              <span class="sm:hidden whitespace-nowrap">{gettext("Archive")}</span>
+                            </button>
+                            <button
+                              class="btn btn-outline btn-xs text-error tooltip tooltip-bottom"
+                              phx-click="trash_data"
+                              phx-value-uuid={data_record.uuid}
+                              phx-disable-with={gettext("…")}
+                              data-tip={gettext("Move to trash")}
+                            >
+                              <.icon name="hero-trash" class="w-4 h-4 hidden sm:inline" />
+                              <span class="sm:hidden whitespace-nowrap">{gettext("Trash")}</span>
+                            </button>
                         <% end %>
                       </div>
                     </.table_default_cell>
@@ -1484,27 +1716,70 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                       <.icon name="hero-pencil" class="w-4 h-4 mr-1" /> {gettext("Edit")}
                     </.link>
 
-                    <%!-- Archive/Restore Button --%>
-                    <%= if data_record.status == "archived" do %>
-                      <button
-                        class="btn btn-success btn-sm"
-                        phx-click="restore_data"
-                        phx-value-uuid={data_record.uuid}
-                        phx-disable-with={gettext("…")}
-                        title={gettext("Restore data record")}
-                      >
-                        <.icon name="hero-arrow-path" class="w-4 h-4" />
-                      </button>
-                    <% else %>
-                      <button
-                        class="btn btn-error btn-sm"
-                        phx-click="archive_data"
-                        phx-value-uuid={data_record.uuid}
-                        phx-disable-with={gettext("…")}
-                        title={gettext("Archive data record")}
-                      >
-                        <.icon name="hero-trash" class="w-4 h-4" />
-                      </button>
+                    <%!-- Archive / Trash / Restore / Permanent-delete buttons --%>
+                    <%= cond do %>
+                      <% data_record.status == "trashed" -> %>
+                        <button
+                          class="btn btn-success btn-sm"
+                          phx-click="restore_from_trash"
+                          phx-value-uuid={data_record.uuid}
+                          phx-disable-with={gettext("…")}
+                          title={gettext("Restore from trash")}
+                        >
+                          <.icon name="hero-arrow-uturn-left" class="w-4 h-4" />
+                        </button>
+                        <button
+                          class="btn btn-error btn-sm"
+                          phx-click="permanent_delete"
+                          phx-value-uuid={data_record.uuid}
+                          phx-disable-with={gettext("…")}
+                          title={gettext("Delete forever")}
+                          data-confirm={
+                            gettext(
+                              "Permanently delete this record? This cannot be undone, and will fail if it's still referenced by other tables."
+                            )
+                          }
+                        >
+                          <.icon name="hero-x-circle" class="w-4 h-4" />
+                        </button>
+                      <% data_record.status == "archived" -> %>
+                        <button
+                          class="btn btn-success btn-sm"
+                          phx-click="restore_data"
+                          phx-value-uuid={data_record.uuid}
+                          phx-disable-with={gettext("…")}
+                          title={gettext("Restore data record")}
+                        >
+                          <.icon name="hero-arrow-path" class="w-4 h-4" />
+                        </button>
+                        <button
+                          class="btn btn-error btn-sm"
+                          phx-click="trash_data"
+                          phx-value-uuid={data_record.uuid}
+                          phx-disable-with={gettext("…")}
+                          title={gettext("Move to trash")}
+                        >
+                          <.icon name="hero-trash" class="w-4 h-4" />
+                        </button>
+                      <% true -> %>
+                        <button
+                          class="btn btn-warning btn-sm"
+                          phx-click="archive_data"
+                          phx-value-uuid={data_record.uuid}
+                          phx-disable-with={gettext("…")}
+                          title={gettext("Archive data record")}
+                        >
+                          <.icon name="hero-archive-box" class="w-4 h-4" />
+                        </button>
+                        <button
+                          class="btn btn-error btn-sm"
+                          phx-click="trash_data"
+                          phx-value-uuid={data_record.uuid}
+                          phx-disable-with={gettext("…")}
+                          title={gettext("Move to trash")}
+                        >
+                          <.icon name="hero-trash" class="w-4 h-4" />
+                        </button>
                     <% end %>
                   </div>
                 </div>

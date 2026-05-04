@@ -43,6 +43,9 @@ defmodule PhoenixKitEntities.Errors do
           | :not_found
           | :invalid_format
           | :unexpected
+          | :already_trashed
+          | :not_trashed
+          | :referenced_by_external
 
   @typedoc """
   Tagged tuples carrying interpolation context.
@@ -64,6 +67,14 @@ defmodule PhoenixKitEntities.Errors do
   def message(:not_found), do: gettext("Record not found.")
   def message(:invalid_format), do: gettext("Invalid format.")
   def message(:unexpected), do: gettext("An unexpected error occurred.")
+  def message(:already_trashed), do: gettext("This record is already in the trash.")
+  def message(:not_trashed), do: gettext("This record is not in the trash.")
+
+  def message(:referenced_by_external) do
+    gettext(
+      "Cannot permanently delete: this record is referenced by other tables in the parent application. Restore it or remove the references first."
+    )
+  end
 
   def message({:invalid_field_type, type}) when is_binary(type) do
     gettext("Invalid field type: %{type}", type: type)
