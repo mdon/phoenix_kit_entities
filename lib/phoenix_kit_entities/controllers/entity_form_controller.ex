@@ -492,18 +492,18 @@ defmodule PhoenixKitEntities.Controllers.EntityFormController do
     Regex.match?(~r/^(?:\d{1,3}\.){3}\d{1,3}$/, ip) and not private_or_local_ip?(ip)
   end
 
+  # Integer.parse/1 returns `{int, rest}` or `:error` instead of raising,
+  # so we can drop the rescue clause and pin the failure shape explicitly.
+  # Any non-numeric octet (e.g. "abc.def.ghi.jkl" slipping past the regex,
+  # or values overflowing int) collapses to the safe-by-default `true`.
   defp private_or_local_ip?(ip) do
-    case String.split(ip, ".") do
-      [a, b, _, _] ->
-        a_int = String.to_integer(a)
-        b_int = String.to_integer(b)
-        unsafe_octets?(a_int, b_int)
-
-      _ ->
-        true
+    with [a, b, _, _] <- String.split(ip, "."),
+         {a_int, ""} <- Integer.parse(a),
+         {b_int, ""} <- Integer.parse(b) do
+      unsafe_octets?(a_int, b_int)
+    else
+      _ -> true
     end
-  rescue
-    _ -> true
   end
 
   # RFC1918 + loopback + link-local + multicast/reserved (224+).
