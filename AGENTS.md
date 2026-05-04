@@ -264,9 +264,16 @@ config :phoenix_kit_entities,
 ```
 
 `EntityData.count_external_references/1` resolves the entity name to
-matching callbacks and sums them. Informational only — the admin UI
-can surface "Used by N orders" before showing the Trash button, but
-soft-delete is safe regardless.
+matching callbacks and sums them. Multiple callbacks per entity name
+are fine — they all contribute (e.g. `orders` + `audit_log` both
+referencing the same `order_status` add together). Informational
+only, **NOT a delete-blocker** — soft-delete is safe regardless of
+the count.
+
+The 1-arity form preloads `:entity` per call. When rendering many
+records (admin trash bin, list views), prefer the 2-arity form
+`count_external_references(record, entity)` and load the entity
+once outside the loop to skip the N+1.
 
 **Admin UX (DataNavigator).** Bulk Delete now soft-trashes by default;
 permanent delete is a separate action available only from the Trash

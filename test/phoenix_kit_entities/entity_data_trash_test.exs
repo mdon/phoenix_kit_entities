@@ -652,6 +652,47 @@ defmodule PhoenixKitEntities.EntityDataTrashTest do
 
       assert EntityData.count_external_references(orphan) == 0
     end
+
+    test "2-arity form accepts a preloaded entity to skip the per-call preload", ctx do
+      # The single-arg form does `repo().preload(entity_data, :entity).entity`
+      # on every call — N+1 when rendering many records. The 2-arity form
+      # lets callers pass an already-loaded entity (or any map with a
+      # binary `:name` key) to avoid the round-trip.
+      [record | _] = ctx.records
+
+      Application.put_env(:phoenix_kit_entities, :reverse_references, [
+        {"trash_test", fn _uuid -> 11 end}
+      ])
+
+      on_exit(fn -> Application.delete_env(:phoenix_kit_entities, :reverse_references) end)
+
+      # Same numeric result whether we pass the entity or let it preload.
+      preloaded = Entities.get_entity!(ctx.entity.uuid)
+      assert EntityData.count_external_references(record, preloaded) == 11
+      assert EntityData.count_external_references(record) == 11
+
+      # A bare-shape map with the right :name still works — useful for
+      # callers that have entity name in a custom struct (sitemap source,
+      # mirror exporter, etc.).
+      assert EntityData.count_external_references(record, %{name: "trash_test"}) == 11
+    end
+
+    test "2-arity form returns 0 when entity is nil-but-explicit (no preload, no DB hit)" do
+      # Useful belt-and-suspenders for callers that want to bypass the
+      # preload AND know the entity isn't in their working set.
+      orphan = %EntityData{uuid: UUID.generate(), entity_uuid: UUID.generate()}
+
+      Application.put_env(:phoenix_kit_entities, :reverse_references, [
+        {"trash_test", fn _uuid -> 99 end}
+      ])
+
+      on_exit(fn -> Application.delete_env(:phoenix_kit_entities, :reverse_references) end)
+
+      # Passing a non-name-bearing value collapses to 0 without falling
+      # through to the preload path.
+      assert EntityData.count_external_references(orphan, %{}) == 0
+      assert EntityData.count_external_references(orphan, "not a struct") == 0
+    end
   end
 
   defp repo, do: PhoenixKit.RepoHelper.repo()

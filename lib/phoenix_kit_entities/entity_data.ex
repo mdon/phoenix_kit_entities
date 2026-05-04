@@ -1536,9 +1536,23 @@ defmodule PhoenixKitEntities.EntityData do
   integer. Returns the total count across all matching callbacks for
   the record's entity, or `0` if no callbacks are registered.
 
-  This is informational, not a delete-blocker — soft-delete keeps the
-  row alive regardless. Used by the admin to render "Used by N rows"
-  hints before the operator clicks Trash or Permanently delete.
+  **Informational only — NOT a delete-blocker.** Soft-delete keeps the
+  row alive regardless of how many parent rows reference it; this
+  count is just for the admin UI to surface "Used by N rows" hints
+  before the operator clicks Trash or Permanently delete. Don't wire
+  it into the actual delete path.
+
+  ## Performance — pass `entity` when the caller already has it
+
+  The single-arg form preloads `:entity` on every call. When rendering
+  many records (e.g. the admin trash bin), pass the already-loaded
+  entity as the second arg to skip the per-call N+1:
+
+      entity = Entities.get_entity!(entity_uuid)
+
+      Enum.map(records, fn record ->
+        EntityData.count_external_references(record, entity)
+      end)
 
   ## Configuration
 
@@ -1548,31 +1562,50 @@ defmodule PhoenixKitEntities.EntityData do
           {"order_status", &MyApp.Orders.count_orders_with_status/1},
           {"sub_order_status", &MyApp.Orders.count_sub_orders_with_status/1}
         ]
+
+  Multiple callbacks per entity name are supported — every matching
+  tuple's count contributes to the total. Useful when the same
+  entity_data acts as a controlled vocabulary for several parent
+  tables (e.g. `orders` and `audit_log` both referencing
+  `order_status`).
   """
   @spec count_external_references(t()) :: non_neg_integer()
-  def count_external_references(%__MODULE__{} = entity_data) do
-    entity = repo().preload(entity_data, :entity).entity
+  @spec count_external_references(t(), map() | nil) :: non_neg_integer()
+  def count_external_references(entity_data, entity \\ nil)
 
-    case entity do
-      %{name: name} when is_binary(name) ->
-        :phoenix_kit_entities
-        |> Application.get_env(:reverse_references, [])
-        |> Enum.filter(fn
-          {^name, fun} when is_function(fun, 1) -> true
-          _ -> false
-        end)
-        |> Enum.reduce(0, fn {_name, fun}, acc ->
-          try do
-            count = fun.(entity_data.uuid)
-            if is_integer(count) and count >= 0, do: acc + count, else: acc
-          rescue
-            _ -> acc
-          end
-        end)
+  def count_external_references(%__MODULE__{} = entity_data, %{name: name})
+      when is_binary(name) do
+    do_count_external_references(entity_data, name)
+  end
 
-      _ ->
-        0
+  def count_external_references(%__MODULE__{} = entity_data, nil) do
+    # Fall back to a per-call preload when the caller didn't pass an
+    # entity. Always exits to do_count_external_references/2 or to 0 —
+    # never re-enters this clause, so the orphan-entity case can't
+    # recurse infinitely.
+    case repo().preload(entity_data, :entity).entity do
+      %{name: name} when is_binary(name) -> do_count_external_references(entity_data, name)
+      _ -> 0
     end
+  end
+
+  def count_external_references(%__MODULE__{}, _), do: 0
+
+  defp do_count_external_references(entity_data, name) when is_binary(name) do
+    :phoenix_kit_entities
+    |> Application.get_env(:reverse_references, [])
+    |> Enum.filter(fn
+      {^name, fun} when is_function(fun, 1) -> true
+      _ -> false
+    end)
+    |> Enum.reduce(0, fn {_name, fun}, acc ->
+      try do
+        count = fun.(entity_data.uuid)
+        if is_integer(count) and count >= 0, do: acc + count, else: acc
+      rescue
+        _ -> acc
+      end
+    end)
   end
 
   @doc """
