@@ -1164,6 +1164,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                   <button
                     phx-click="bulk_action"
                     phx-value-action="restore_from_trash"
+                    phx-disable-with={gettext("…")}
                     class="btn btn-success btn-sm"
                   >
                     <.icon name="hero-arrow-uturn-left" class="w-4 h-4" /> {gettext("Restore")}
@@ -1171,6 +1172,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                   <button
                     phx-click="bulk_action"
                     phx-value-action="permanent_delete"
+                    phx-disable-with={gettext("…")}
                     class="btn btn-error btn-sm"
                     data-confirm={
                       gettext(
@@ -1186,6 +1188,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                   <button
                     phx-click="bulk_action"
                     phx-value-action="archive"
+                    phx-disable-with={gettext("…")}
                     class="btn btn-warning btn-sm"
                   >
                     <.icon name="hero-archive-box" class="w-4 h-4" /> {gettext("Archive")}
@@ -1193,6 +1196,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                   <button
                     phx-click="bulk_action"
                     phx-value-action="restore"
+                    phx-disable-with={gettext("…")}
                     class="btn btn-success btn-sm"
                   >
                     <.icon name="hero-arrow-path" class="w-4 h-4" /> {gettext("Restore")}
@@ -1200,6 +1204,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                   <button
                     phx-click="bulk_action"
                     phx-value-action="trash"
+                    phx-disable-with={gettext("…")}
                     class="btn btn-error btn-sm"
                     data-confirm={
                       gettext(
@@ -1230,6 +1235,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                         phx-click="bulk_action"
                         phx-value-action="change_status"
                         phx-value-status="published"
+                        phx-disable-with={gettext("…")}
                       >
                         {gettext("Published")}
                       </a>
@@ -1239,6 +1245,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                         phx-click="bulk_action"
                         phx-value-action="change_status"
                         phx-value-status="draft"
+                        phx-disable-with={gettext("…")}
                       >
                         {gettext("Draft")}
                       </a>
@@ -1248,6 +1255,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                         phx-click="bulk_action"
                         phx-value-action="change_status"
                         phx-value-status="archived"
+                        phx-disable-with={gettext("…")}
                       >
                         {gettext("Archived")}
                       </a>

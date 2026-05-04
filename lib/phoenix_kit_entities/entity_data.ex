@@ -627,6 +627,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> PhoenixKitEntities.EntityData.list_trashed_by_entity(entity_uuid)
       [%PhoenixKitEntities.EntityData{status: "trashed"}, ...]
   """
+  @spec list_trashed_by_entity(binary(), keyword()) :: [t()]
   def list_trashed_by_entity(entity_uuid, opts \\ []) when is_binary(entity_uuid) do
     from(d in __MODULE__,
       where: d.entity_uuid == ^entity_uuid and d.status == ^@soft_delete_status,
@@ -1272,6 +1273,7 @@ defmodule PhoenixKitEntities.EntityData do
   @doc """
   Counts trashed records for an entity. Drives the trash-bin badge.
   """
+  @spec trashed_count(binary()) :: non_neg_integer()
   def trashed_count(entity_uuid) when is_binary(entity_uuid) do
     from(d in __MODULE__,
       where: d.entity_uuid == ^entity_uuid and d.status == ^@soft_delete_status,

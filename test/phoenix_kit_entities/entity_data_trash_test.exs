@@ -378,12 +378,22 @@ defmodule PhoenixKitEntities.EntityDataTrashTest do
       )
 
       uuids = Enum.map(ctx.records, & &1.uuid)
-      assert {:error, :referenced_by_external} = EntityData.bulk_delete(uuids)
+
+      assert {:error, :referenced_by_external} =
+               EntityData.bulk_delete(uuids, actor_uuid: ctx.actor_uuid)
 
       # Transaction rolled back — every record still exists.
       Enum.each(uuids, fn uuid ->
         assert %EntityData{} = EntityData.get(uuid)
       end)
+
+      # Pin the audit row — covers the user-initiated bulk delete attempt
+      # even though the DB rolled back. `db_pending: true` differentiates
+      # this from a successful bulk_deleted row.
+      assert_activity_logged("entity_data.bulk_deleted",
+        actor_uuid: ctx.actor_uuid,
+        metadata_has: %{"db_pending" => true}
+      )
     end
 
     test "delete/2 surfaces NOT NULL violation as :referenced_by_external (issue #12 case)",

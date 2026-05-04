@@ -430,6 +430,13 @@ defmodule PhoenixKitEntities.Web.DataNavigatorLiveTest do
 
       assert render(view) =~ "permanently deleted"
       refute EntityData.get(record.uuid)
+
+      # Pin the audit row — without this, the LV could silently drop
+      # actor_uuid and the test would still pass on flash + DB state.
+      assert_activity_logged("entity_data.deleted",
+        actor_uuid: ctx.actor_uuid,
+        resource_uuid: record.uuid
+      )
     end
 
     test "permanent_delete flashes a friendly message on FK violation, row stays",
@@ -458,6 +465,14 @@ defmodule PhoenixKitEntities.Web.DataNavigatorLiveTest do
       assert render(view) =~ "referenced by other tables"
       # Row still exists — soft-delete fallback path.
       assert %EntityData{status: "trashed"} = EntityData.get(record.uuid)
+
+      # Pin the audit row — `db_pending: true` flags the user-initiated
+      # action that the DB rolled back. Without this assertion the LV
+      # could silently drop actor_uuid on the error path.
+      assert_activity_logged("entity_data.deleted",
+        actor_uuid: ctx.actor_uuid,
+        metadata_has: %{"db_pending" => true}
+      )
     end
 
     test "bulk_action 'permanent_delete' hard-deletes selected trashed records",
