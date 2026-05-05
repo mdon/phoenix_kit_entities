@@ -61,7 +61,15 @@ repo_available =
       # call the host app makes in production. The entities tables come from
       # core (V17 creates them; V40/V58/V67/V74/V81 evolve them). No
       # module-owned DDL anywhere.
-      Ecto.Migrator.run(TestRepo, [{0, PhoenixKit.Migration}], :up, all: true, log: false)
+      #
+      # `ensure_current/2` (core 1.7.105+ / phoenix_kit#515) re-applies
+      # any newly-shipped Vxxx migrations on every boot by passing a
+      # fresh wall-clock version to Ecto.Migrator. Replaces the
+      # `Ecto.Migrator.run([{0, PhoenixKit.Migration}], :up, all: true)`
+      # pattern, which silently stopped re-applying once `0` was
+      # recorded in `schema_migrations` — see
+      # `dev_docs/migration_cleanup.md` for the staleness story.
+      PhoenixKit.Migration.ensure_current(TestRepo, log: false)
 
       Ecto.Adapters.SQL.Sandbox.mode(TestRepo, :manual)
 
