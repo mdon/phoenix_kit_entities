@@ -67,8 +67,10 @@ repo_available =
       # fresh wall-clock version to Ecto.Migrator. Replaces the
       # `Ecto.Migrator.run([{0, PhoenixKit.Migration}], :up, all: true)`
       # pattern, which silently stopped re-applying once `0` was
-      # recorded in `schema_migrations` — see
-      # `dev_docs/migration_cleanup.md` for the staleness story.
+      # recorded in `schema_migrations`. See the docstring on
+      # `PhoenixKit.Migration.ensure_current/2` for the full staleness
+      # story (clock-skew window, schema_migrations row accumulation,
+      # prefix forwarding).
       PhoenixKit.Migration.ensure_current(TestRepo, log: false)
 
       Ecto.Adapters.SQL.Sandbox.mode(TestRepo, :manual)

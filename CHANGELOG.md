@@ -1,3 +1,9 @@
+## 0.2.1 - 2026-05-05
+
+### Changed
+- Bump `phoenix_kit` lockfile from 1.7.103 → 1.7.105. The new release ships `PhoenixKit.Migration.ensure_current/2`, which `test/test_helper.exs` adopted in PR #14 as the re-runnable replacement for `Ecto.Migrator.run([{0, PhoenixKit.Migration}], :up, all: true)`. No production code path changed — test-suite-only impact.
+- `test/test_helper.exs` — replaced a broken `dev_docs/migration_cleanup.md` doc pointer with a reference to the upstream `PhoenixKit.Migration.ensure_current/2` docstring (PR #14 review nit N1).
+
 ## 0.2.0 - 2026-05-04
 
 ### Added
