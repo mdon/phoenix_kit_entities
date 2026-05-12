@@ -74,6 +74,7 @@ defmodule PhoenixKitEntities.EntityData do
   use Gettext, backend: PhoenixKitWeb.Gettext
   import Ecto.Changeset
   import Ecto.Query, warn: false
+  require Logger
 
   alias PhoenixKit.Modules.Languages.DialectMapper
   alias PhoenixKit.Users.Auth
@@ -1377,8 +1378,15 @@ defmodule PhoenixKitEntities.EntityData do
   def trash(%__MODULE__{status: @soft_delete_status}, _opts), do: {:error, :already_trashed}
 
   def trash(%__MODULE__{} = entity_data, opts) when is_list(opts) do
+    # Stash the row's current status in metadata so restore can return
+    # to it. Without this, restore unconditionally lands on "published"
+    # and a trashed draft silently goes live on restore.
+    metadata =
+      (entity_data.metadata || %{})
+      |> Map.put("trashed_from_status", entity_data.status)
+
     entity_data
-    |> changeset(%{status: @soft_delete_status})
+    |> status_only_changeset(@soft_delete_status, metadata)
     |> repo().update()
     |> notify_data_event(:trashed, opts)
   end
@@ -1386,30 +1394,57 @@ defmodule PhoenixKitEntities.EntityData do
   def trash(%__MODULE__{} = entity_data), do: trash(entity_data, [])
 
   @doc """
-  Restores a trashed entity data record by setting its status back to
-  `"published"`.
+  Restores a trashed entity data record. The status it returns to is
+  the one stashed in `metadata["trashed_from_status"]` when the row was
+  trashed — defaulting to `"draft"` if no stash is present (e.g. for
+  rows trashed via `bulk_trash/2`, or rows trashed before this stash
+  shipped).
 
   Returns `{:error, :not_trashed}` if the record isn't currently trashed —
-  this is a guardrail against re-publishing arbitrary records via the
-  trash-restore path. Use `update/2` for general status changes.
+  guardrail against re-publishing arbitrary records via the trash-restore
+  path. Use `update/2` for general status changes.
 
   ## Examples
 
       iex> EntityData.restore_from_trash(trashed_record, actor_uuid: admin.uuid)
-      {:ok, %EntityData{status: "published"}}
+      {:ok, %EntityData{status: "published"}}  # was published before trashing
   """
   @spec restore_from_trash(t(), keyword()) ::
           {:ok, t()} | {:error, :not_trashed | Ecto.Changeset.t()}
   def restore_from_trash(entity_data, opts \\ [])
 
   def restore_from_trash(%__MODULE__{status: @soft_delete_status} = entity_data, opts) do
+    prior_status =
+      case entity_data.metadata do
+        %{"trashed_from_status" => s} when s in @valid_statuses and s != @soft_delete_status -> s
+        _ -> "draft"
+      end
+
+    metadata = (entity_data.metadata || %{}) |> Map.delete("trashed_from_status")
+
     entity_data
-    |> changeset(%{status: "published"})
+    |> status_only_changeset(prior_status, metadata)
     |> repo().update()
     |> notify_data_event(:restored, opts)
   end
 
   def restore_from_trash(%__MODULE__{}, _opts), do: {:error, :not_trashed}
+
+  # Focused changeset for trash / restore — only touches `:status`,
+  # `:metadata`, and `:date_updated`. Skips the full per-field validation
+  # against the entity blueprint because a record whose `:data` is no
+  # longer valid (e.g. the entity gained a required field after the row
+  # was created) must still be retirable via trash. The bulk paths
+  # bypass changesets entirely; this keeps single-record + bulk in sync.
+  defp status_only_changeset(entity_data, status, metadata) do
+    entity_data
+    |> cast(%{status: status, metadata: metadata, date_updated: UtilsDate.utc_now()}, [
+      :status,
+      :metadata,
+      :date_updated
+    ])
+    |> validate_inclusion(:status, @valid_statuses)
+  end
 
   # Match Postgres FK / NOT NULL violations raised when a parent-app row
   # still references this record. SQLSTATE codes are stable: `23503` =
@@ -1789,8 +1824,8 @@ defmodule PhoenixKitEntities.EntityData do
 
   ## Performance — pass `entity` when the caller already has it
 
-  The single-arg form preloads `:entity` on every call. When rendering
-  many records (e.g. the admin trash bin), pass the already-loaded
+  The single-arg form preloads `:entity` on every call. Parent-app
+  callers rendering many records in a loop can pass the already-loaded
   entity as the second arg to skip the per-call N+1:
 
       entity = Entities.get_entity!(entity_uuid)
@@ -1848,7 +1883,17 @@ defmodule PhoenixKitEntities.EntityData do
         count = fun.(entity_data.uuid)
         if is_integer(count) and count >= 0, do: acc + count, else: acc
       rescue
-        _ -> acc
+        # Narrow to the DB-availability shapes — bugs in the parent-app
+        # callback (KeyError, FunctionClauseError, etc.) should surface
+        # in logs instead of silently zeroing the count. A broken
+        # callback that reports "Used by 0 rows" is the surprising
+        # default this guard was supposed to prevent.
+        e in [DBConnection.ConnectionError, Postgrex.Error] ->
+          Logger.warning(
+            "[Entities] reverse_references callback failed: #{Exception.message(e)}"
+          )
+
+          acc
       end
     end)
   end
@@ -1941,18 +1986,11 @@ defmodule PhoenixKitEntities.EntityData do
   end
 
   defp do_bulk_delete(uuids, opts) do
-    txn =
-      repo().transaction(fn ->
-        # Null trashed children of any row in the input set before
-        # deleting, so the self-FK doesn't block. Live external
-        # children would have tripped `has_external_live_children?/1`.
-        nullify_trashed_children(uuids)
-
-        from(d in __MODULE__, where: d.uuid in ^uuids)
-        |> repo().delete_all()
-      end)
-
-    case txn do
+    # Wrap ONLY the transaction in the rescue so an `ActivityLog.log`
+    # failure can't be misclassified as `:referenced_by_external`. The
+    # transaction itself returns `{:error, _}` on rollback; raised
+    # Postgrex errors are the FK / NOT NULL paths.
+    case run_bulk_delete_txn(uuids) do
       {:ok, {count, _} = result} ->
         PhoenixKitEntities.ActivityLog.log(%{
           action: "entity_data.bulk_deleted",
@@ -1971,10 +2009,21 @@ defmodule PhoenixKitEntities.EntityData do
         log_data_error_activity(:bulk_deleted, opts)
         {:error, :referenced_by_external}
     end
+  end
+
+  defp run_bulk_delete_txn(uuids) do
+    repo().transaction(fn ->
+      # Null trashed children of any row in the input set before
+      # deleting, so the self-FK doesn't block. Live external
+      # children would have tripped `has_external_live_children?/1`.
+      nullify_trashed_children(uuids)
+
+      from(d in __MODULE__, where: d.uuid in ^uuids)
+      |> repo().delete_all()
+    end)
   rescue
     e in Postgrex.Error ->
       if foreign_key_or_not_null_violation?(e) do
-        log_data_error_activity(:bulk_deleted, opts)
         {:error, :referenced_by_external}
       else
         reraise e, __STACKTRACE__

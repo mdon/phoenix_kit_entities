@@ -565,17 +565,40 @@ defmodule PhoenixKitEntities.EntityDataTrashTest do
       assert EntityData.count_external_references(record) == 10
     end
 
-    test "ignores callbacks that raise", ctx do
+    test "swallows DB-availability raises and logs a warning", ctx do
       [record | _] = ctx.records
 
       Application.put_env(:phoenix_kit_entities, :reverse_references, [
-        {"trash_test", fn _uuid -> raise "boom" end},
+        {"trash_test",
+         fn _uuid ->
+           raise DBConnection.ConnectionError, message: "no connection"
+         end},
         {"trash_test", fn _uuid -> 5 end}
       ])
 
       on_exit(fn -> Application.delete_env(:phoenix_kit_entities, :reverse_references) end)
 
-      assert EntityData.count_external_references(record) == 5
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert EntityData.count_external_references(record) == 5
+        end)
+
+      assert log =~ "reverse_references callback failed"
+    end
+
+    test "lets non-DB callback bugs propagate (a broken callback is a real bug)",
+         ctx do
+      [record | _] = ctx.records
+
+      Application.put_env(:phoenix_kit_entities, :reverse_references, [
+        {"trash_test", fn _uuid -> raise "boom" end}
+      ])
+
+      on_exit(fn -> Application.delete_env(:phoenix_kit_entities, :reverse_references) end)
+
+      assert_raise RuntimeError, "boom", fn ->
+        EntityData.count_external_references(record)
+      end
     end
 
     test "ignores callbacks returning negative integers", ctx do

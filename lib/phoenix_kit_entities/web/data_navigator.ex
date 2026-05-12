@@ -310,12 +310,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
            socket
            |> refresh_data_stats()
            |> apply_filters()
-           |> put_flash(
-             :info,
-             gettext("Record moved to trash. Restore it before %{days} days to keep it.",
-               days: 90
-             )
-           )}
+           |> put_flash(:info, gettext("Record moved to trash. Restore from the trash view."))}
 
         {:error, :already_trashed} ->
           {:noreply, put_flash(socket, :info, gettext("Record is already in the trash"))}
@@ -364,6 +359,9 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
            |> put_flash(:info, gettext("Record permanently deleted"))}
 
         {:error, :referenced_by_external} ->
+          # No `refresh_data_stats` / `apply_filters` here — nothing
+          # changed in the DB. The single-select stays unchanged so
+          # the user can adjust references in the parent app and retry.
           {:noreply,
            put_flash(socket, :error, PhoenixKitEntities.Errors.message(:referenced_by_external))}
 
@@ -380,13 +378,17 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
       data_record = EntityData.get!(uuid)
 
       # Trashed records are excluded from the cycle — restore them
-      # explicitly via the dedicated Restore button instead.
+      # explicitly via the dedicated Restore button instead. The UI
+      # hides the toggle button for trashed rows so this case clause
+      # is unreachable in practice; the catch-all keeps the function
+      # total so an out-of-band call (stale browser tab, custom client)
+      # is a silent no-op rather than a `CaseClauseError`.
       new_status =
         case data_record.status do
           "draft" -> "published"
           "published" -> "archived"
           "archived" -> "draft"
-          "trashed" -> "trashed"
+          _ -> data_record.status
         end
 
       case EntityData.update_data(data_record, %{status: new_status}, actor_opts(socket)) do
@@ -604,6 +606,10 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
          |> put_flash(:info, gettext("%{count} records permanently deleted", count: count))}
 
       {:error, :referenced_by_external} ->
+        # No `assign(:selected_uuids, MapSet.new())` here — the bulk
+        # delete rolled back. Keeping the selection lets the user
+        # remove the FK-referenced rows from the multi-select and
+        # retry without re-checking each box.
         {:noreply,
          put_flash(socket, :error, PhoenixKitEntities.Errors.message(:referenced_by_external))}
     end
