@@ -551,13 +551,17 @@ defmodule PhoenixKitEntities.Controllers.EntityFormController do
 
   defp safe_referer_path(referer, expected_host) when is_binary(referer) do
     case URI.parse(referer) do
-      %URI{scheme: scheme, host: ^expected_host, path: path}
+      %URI{scheme: scheme, host: ^expected_host, path: path, query: query}
       when scheme in ["http", "https"] and is_binary(path) ->
-        # Reattach query so the user lands back exactly where they
-        # came from (filters, scroll position, etc).
-        case URI.parse(referer).query do
-          nil -> path
-          q -> path <> "?" <> q
+        # Reject protocol-relative paths ("//evil.com/foo" parses out as
+        # a `path` here). `redirect(conn, to: "//…")` would otherwise
+        # raise `ArgumentError` via Phoenix's own local-URL guard — not
+        # an open redirect, but a 500 we'd rather convert to the "/" fallback.
+        cond do
+          String.starts_with?(path, "//") -> nil
+          not String.starts_with?(path, "/") -> nil
+          is_binary(query) -> path <> "?" <> query
+          true -> path
         end
 
       _ ->

@@ -193,6 +193,23 @@ defmodule PhoenixKitEntities.EntityDataTrashTest do
       assert entity_uuid == ctx.entity.uuid
       assert data_uuid == record.uuid
     end
+
+    # `bulk_trash/2` uses `update_all` and skips the per-row metadata
+    # stash that single-record `trash/2` writes. A row trashed via the
+    # bulk path therefore has no `trashed_from_status` key, and the
+    # single-record restore must fall back to `"draft"` — pinning that
+    # documented default so a later refactor doesn't quietly re-publish.
+    test "restores bulk-trashed rows to \"draft\" (no per-row stash)", ctx do
+      [record | _] = ctx.records
+      {1, _} = EntityData.bulk_trash([record.uuid], actor_uuid: ctx.actor_uuid)
+
+      trashed = EntityData.get!(record.uuid)
+      assert trashed.status == "trashed"
+      refute Map.has_key?(trashed.metadata || %{}, "trashed_from_status")
+
+      assert {:ok, %EntityData{status: "draft"}} =
+               EntityData.restore_from_trash(trashed, actor_uuid: ctx.actor_uuid)
+    end
   end
 
   describe "list_trashed_by_entity/2" do

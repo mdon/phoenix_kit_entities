@@ -1332,7 +1332,7 @@ defmodule PhoenixKitEntities do
       iex> PhoenixKitEntities.get_mirror_settings(entity)
       %{mirror_definitions: true, mirror_data: false}
   """
-  @spec get_mirror_settings(t()) :: %{definitions: boolean(), data: boolean()}
+  @spec get_mirror_settings(t()) :: %{mirror_definitions: boolean(), mirror_data: boolean()}
   def get_mirror_settings(%__MODULE__{settings: settings}) do
     settings = settings || %{}
 
@@ -1430,7 +1430,7 @@ defmodule PhoenixKitEntities do
       iex> PhoenixKitEntities.enable_all_definitions_mirror()
       {:ok, count}
   """
-  @spec enable_all_definitions_mirror() :: {non_neg_integer(), nil}
+  @spec enable_all_definitions_mirror() :: {:ok, non_neg_integer()}
   def enable_all_definitions_mirror do
     entities = list_entities()
 
@@ -1451,7 +1451,7 @@ defmodule PhoenixKitEntities do
       iex> PhoenixKitEntities.disable_all_definitions_mirror()
       {:ok, count}
   """
-  @spec disable_all_definitions_mirror() :: {non_neg_integer(), nil}
+  @spec disable_all_definitions_mirror() :: {:ok, non_neg_integer()}
   def disable_all_definitions_mirror do
     entities = list_entities()
 
@@ -1472,7 +1472,7 @@ defmodule PhoenixKitEntities do
       iex> PhoenixKitEntities.enable_all_data_mirror()
       {:ok, count}
   """
-  @spec enable_all_data_mirror() :: {non_neg_integer(), nil}
+  @spec enable_all_data_mirror() :: {:ok, non_neg_integer()}
   def enable_all_data_mirror do
     entities = list_entities()
 
@@ -1493,7 +1493,7 @@ defmodule PhoenixKitEntities do
       iex> PhoenixKitEntities.disable_all_data_mirror()
       {:ok, count}
   """
-  @spec disable_all_data_mirror() :: {non_neg_integer(), nil}
+  @spec disable_all_data_mirror() :: {:ok, non_neg_integer()}
   def disable_all_data_mirror do
     entities = list_entities()
 

@@ -88,9 +88,13 @@ defmodule PhoenixKitEntities.Web.EntityForm do
   defp referer_to_return_path(_), do: nil
 
   # An "admin path" lives under <url_prefix>/.../admin/. We don't trust
-  # arbitrary site paths — only the admin area.
+  # arbitrary site paths — only the admin area. The trailing "/" in
+  # "/admin/" matters: without it, lookalike paths like "/admin-tools/foo"
+  # would slip through. Reject protocol-relative paths up front for the
+  # same reason `safe_referer_path/2` does.
   defp internal_admin_path?(path) do
-    String.starts_with?(path, "/") and String.contains?(path, "/admin")
+    String.starts_with?(path, "/") and not String.starts_with?(path, "//") and
+      String.contains?(path, "/admin/")
   end
 
   # If the referrer is the same page we're rendering (e.g. user reloaded
@@ -103,8 +107,9 @@ defmodule PhoenixKitEntities.Web.EntityForm do
       path ->
         current_path = URI.parse(uri).path
 
-        if current_path && String.trim_trailing(current_path, "/") ==
-             String.trim_trailing(path, "/") do
+        if current_path &&
+             String.trim_trailing(current_path, "/") ==
+               String.trim_trailing(path, "/") do
           assign(socket, :return_to_path, nil)
         else
           socket

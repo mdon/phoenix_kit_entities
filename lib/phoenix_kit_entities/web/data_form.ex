@@ -145,22 +145,23 @@ defmodule PhoenixKitEntities.Web.DataForm do
   # row itself and any of its descendants (selecting either would create
   # a cycle). Trashed rows are excluded — they can't meaningfully be a
   # parent in the active tree.
+  #
+  # Loads the entity's rows once and feeds both the depth-ordered tree
+  # build and the descendant exclusion — `list_tree/2` +
+  # `descendant_uuids/3` would each load the same set independently.
   defp assign_parent_options(socket, entity, data_record, locale) do
-    tree = EntityData.list_tree(entity.uuid, lang: locale)
+    rows = EntityData.list_by_entity(entity.uuid, lang: locale)
+    tree = EntityData.tree_from_rows(rows)
 
     excluded_uuids =
       case data_record.uuid do
-        nil ->
-          MapSet.new()
-
-        uuid ->
-          [uuid | EntityData.descendant_uuids(uuid, entity.uuid)]
-          |> MapSet.new()
+        nil -> []
+        uuid -> [uuid | EntityData.descendant_uuids_from_rows(uuid, rows)]
       end
 
     options =
       tree
-      |> Enum.reject(&MapSet.member?(excluded_uuids, &1.record.uuid))
+      |> Enum.reject(&(&1.record.uuid in excluded_uuids))
       |> Enum.map(fn %{record: r, depth: d} ->
         prefix = String.duplicate("— ", d)
         {prefix <> (r.title || ""), r.uuid}

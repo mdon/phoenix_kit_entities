@@ -1,3 +1,22 @@
+## 0.2.2 - 2026-05-12
+
+### Added
+- `PhoenixKitEntities.EntityData.tree_from_rows/1` and `descendant_uuids_from_rows/2` — list-accepting variants of `list_tree/2` and `descendant_uuids/3`. Callers that need both shapes from one entity load (e.g. the parent picker) can now fetch rows once and feed both helpers instead of paying for the same `list_by_entity/2` call twice.
+- Pinning test for the bulk-restore default-status contract — a row trashed via `bulk_trash/2` (no per-row metadata stash) restores to `"draft"`, not `"published"`. Guards against a future refactor accidentally re-publishing archived rows through the bulk path.
+
+### Fixed
+- `entity_form_controller.ex` `safe_referer_path/2` now explicitly rejects protocol-relative paths (`//evil.com/foo`). The same-host check already kept it from being an open redirect, but the raw `path` would bubble up to `Phoenix.Controller.redirect(to: …)` and trip its own `ArgumentError` guard with a 500. The fallback to `"/"` is now graceful. Same pass deduplicated the double `URI.parse(referer)` call by binding `query` in the URI match.
+- `web/entity_form.ex` `internal_admin_path?/1` now requires `/admin/` (with trailing slash) and explicitly rejects `//`-prefixed paths. Previously `String.contains?(path, "/admin")` would also accept lookalikes like `/admin-tools/foo` and `/x/admin.json` as valid "and Return" targets.
+- `web/data_form.ex` parent picker no longer loads the entity's row set twice — the previous call sequence to `EntityData.list_tree/2` followed by `EntityData.descendant_uuids/3` issued two full `list_by_entity/2` queries per mount. Now loads once and feeds both helpers.
+
+### Changed
+- `web/data_navigator.ex` `maybe_tree_order/4` delegates to `EntityData.tree_from_rows/1` instead of a near-duplicate local `tree_order/1` + `walk_for_navigator/3` implementation. Same defensive root-promotion behaviour, just from the shared source.
+- Inline comment on `EntityData.validate_parent_not_descendant/1` documenting the validation-time race window (two concurrent edits on the same chain in opposite directions can each pass their own validator pass and then both commit, producing a cycle the DB will accept). Two fix paths sketched for a future PR — `pg_advisory_xact_lock` + per-row `FOR UPDATE` in the same txn, or a Postgres `BEFORE INSERT/UPDATE` trigger with a recursive-CTE acyclicity check (lives in the companion migration repo).
+
+### Spec corrections
+- `PhoenixKitEntities.get_mirror_settings/1` — spec claimed `%{definitions: boolean(), data: boolean()}` but the impl returns `%{mirror_definitions: …, mirror_data: …}`. Spec aligned with impl + docstring example.
+- `PhoenixKitEntities.{enable,disable}_all_{definitions,data}_mirror/0` — four specs claimed `{non_neg_integer(), nil}` but the impl returns `{:ok, non_neg_integer()}`. Every caller already pattern-matches `{:ok, count}`. Specs corrected.
+
 ## 0.2.1 - 2026-05-05
 
 ### Changed

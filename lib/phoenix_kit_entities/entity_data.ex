@@ -230,6 +230,20 @@ defmodule PhoenixKitEntities.EntityData do
   # the row we are editing, the parent assignment would create a cycle.
   # Only meaningful when both uuids are present and distinct (the
   # self-parent check covers the equal case).
+  #
+  # Race window: the chain is read at *validation* time, not at commit
+  # time, with no row locks. Two concurrent edits on the same chain in
+  # opposite directions can each pass their own validator pass and then
+  # both commit, producing a cycle the DB will accept. A future fix
+  # would either (a) wrap update/2 in a transaction that re-runs the
+  # walk under `SELECT … FOR UPDATE` on the ancestor chain plus a
+  # serializing `pg_advisory_xact_lock(hashtext(entity_uuid))` to block
+  # concurrent inserts, or (b) add a Postgres BEFORE-INSERT/UPDATE
+  # trigger on `parent_uuid` that runs a recursive-CTE acyclicity
+  # check and aborts. Option (b) ships from the companion migration
+  # repo; tracked as a follow-up. The in-memory walk caps at
+  # `@max_ancestor_depth` so even if a pre-existing cycle slips
+  # through, the validator can't loop forever.
   defp validate_parent_not_descendant(changeset) do
     uuid = get_field(changeset, :uuid)
     parent_uuid = get_field(changeset, :parent_uuid)
@@ -750,9 +764,19 @@ defmodule PhoenixKitEntities.EntityData do
   """
   @spec list_tree(binary(), keyword()) :: [%{record: t(), depth: non_neg_integer()}]
   def list_tree(entity_uuid, opts \\ []) when is_binary(entity_uuid) do
-    rows = list_by_entity(entity_uuid, opts)
-    build_tree(rows)
+    entity_uuid
+    |> list_by_entity(opts)
+    |> tree_from_rows()
   end
+
+  @doc """
+  Depth-orders an already-loaded list of rows. Use this when the caller
+  already has the rows in hand (e.g. building both a tree and a
+  descendants set from the same fetch) — skips the per-call DB hit
+  that `list_tree/2` makes.
+  """
+  @spec tree_from_rows([t()]) :: [%{record: t(), depth: non_neg_integer()}]
+  def tree_from_rows(rows) when is_list(rows), do: build_tree(rows)
 
   @doc """
   Returns all descendant UUIDs of a record (children, grandchildren, …).
@@ -777,8 +801,19 @@ defmodule PhoenixKitEntities.EntityData do
   def descendant_uuids(uuid, entity_uuid, opts)
       when is_binary(uuid) and is_binary(entity_uuid) do
     rows = list_by_entity(entity_uuid, opts)
-    children_by_parent = group_by_parent(rows)
-    collect_descendants(uuid, children_by_parent, [])
+    descendant_uuids_from_rows(uuid, rows)
+  end
+
+  @doc """
+  Same as `descendant_uuids/3` but operates on an already-loaded row
+  list. Pair with `tree_from_rows/1` when both shapes are needed from
+  one fetch.
+  """
+  @spec descendant_uuids_from_rows(binary() | nil, [t()]) :: [binary()]
+  def descendant_uuids_from_rows(nil, _rows), do: []
+
+  def descendant_uuids_from_rows(uuid, rows) when is_binary(uuid) and is_list(rows) do
+    collect_descendants(uuid, group_by_parent(rows), [])
   end
 
   # Build a depth-ordered flat list from a sibling-ordered row list.
@@ -1919,9 +1954,7 @@ defmodule PhoenixKitEntities.EntityData do
         # callback that reports "Used by 0 rows" is the surprising
         # default this guard was supposed to prevent.
         e in [DBConnection.ConnectionError, Postgrex.Error] ->
-          Logger.warning(
-            "[Entities] reverse_references callback failed: #{Exception.message(e)}"
-          )
+          Logger.warning("[Entities] reverse_references callback failed: #{Exception.message(e)}")
 
           acc
       end

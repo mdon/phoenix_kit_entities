@@ -366,8 +366,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
            put_flash(socket, :error, PhoenixKitEntities.Errors.message(:referenced_by_external))}
 
         {:error, :has_children} ->
-          {:noreply,
-           put_flash(socket, :error, PhoenixKitEntities.Errors.message(:has_children))}
+          {:noreply, put_flash(socket, :error, PhoenixKitEntities.Errors.message(:has_children))}
 
         {:error, _} ->
           {:noreply, put_flash(socket, :error, gettext("Failed to delete record"))}
@@ -618,8 +617,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
          put_flash(socket, :error, PhoenixKitEntities.Errors.message(:referenced_by_external))}
 
       {:error, :has_children} ->
-        {:noreply,
-         put_flash(socket, :error, PhoenixKitEntities.Errors.message(:has_children))}
+        {:noreply, put_flash(socket, :error, PhoenixKitEntities.Errors.message(:has_children))}
     end
   end
 
@@ -835,31 +833,13 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
   # the template renders without indentation.
   defp maybe_tree_order(records, entity_uuid, "all", "")
        when is_binary(entity_uuid) and records != [] do
-    {tree_records, depth_map} = tree_order(records)
-    {tree_records, depth_map}
+    flat = EntityData.tree_from_rows(records)
+    depths = Map.new(flat, fn %{record: r, depth: d} -> {r.uuid, d} end)
+    {Enum.map(flat, & &1.record), depths}
   end
 
   defp maybe_tree_order(records, _entity_uuid, _status, _search) do
     {records, %{}}
-  end
-
-  defp tree_order(rows) do
-    known = MapSet.new(rows, & &1.uuid)
-    by_parent = Enum.group_by(rows, & &1.parent_uuid)
-
-    roots =
-      Enum.filter(rows, fn row ->
-        is_nil(row.parent_uuid) or not MapSet.member?(known, row.parent_uuid)
-      end)
-
-    flat = Enum.flat_map(roots, &walk_for_navigator(&1, by_parent, 0))
-    depths = Map.new(flat, fn {row, d} -> {row.uuid, d} end)
-    {Enum.map(flat, &elem(&1, 0)), depths}
-  end
-
-  defp walk_for_navigator(row, by_parent, depth) do
-    children = Map.get(by_parent, row.uuid, [])
-    [{row, depth} | Enum.flat_map(children, &walk_for_navigator(&1, by_parent, depth + 1))]
   end
 
   # When an entity is selected, use sort-mode-aware queries

@@ -56,9 +56,7 @@ defmodule PhoenixKitEntities.Web.EntitiesLiveTest do
       # the selector to that menu's unique id (card view has its own
       # inline button on the same uuid).
       view
-      |> element(
-        "#entity-menu-#{ctx.published.uuid} button[phx-click='archive_entity']"
-      )
+      |> element("#entity-menu-#{ctx.published.uuid} button[phx-click='archive_entity']")
       |> render_click()
 
       # Activity row reflects the threaded actor (delta-pin: actor_opts/1).
@@ -99,9 +97,7 @@ defmodule PhoenixKitEntities.Web.EntitiesLiveTest do
       {:ok, view, _html} = live(conn, "/en/admin/entities")
 
       view
-      |> element(
-        "#entity-menu-#{ctx.archived.uuid} button[phx-click='restore_entity']"
-      )
+      |> element("#entity-menu-#{ctx.archived.uuid} button[phx-click='restore_entity']")
       |> render_click()
 
       assert_activity_logged("entity.updated",
