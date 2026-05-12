@@ -41,6 +41,11 @@ defmodule PhoenixKitEntities.ErrorsTest do
       assert msg =~ "Cannot permanently delete"
       assert msg =~ "referenced by other tables"
     end
+
+    test ":has_children" do
+      assert Errors.message(:has_children) ==
+               "Cannot permanently delete: this record has child records. Reassign or delete its children first."
+    end
   end
 
   describe "message/1 tagged tuples" do

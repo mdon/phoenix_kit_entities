@@ -1541,6 +1541,35 @@ defmodule PhoenixKitEntities.Web.DataForm do
                     </label>
                   </div>
 
+                  <%!-- Parent (optional, same-entity) --%>
+                  <div>
+                    <.label for="phoenix_kit_entity_data_parent_uuid">{gettext("Parent")}</.label>
+                    <label class="select w-full">
+                      <select
+                        id="phoenix_kit_entity_data_parent_uuid"
+                        name="phoenix_kit_entity_data[parent_uuid]"
+                        disabled={@readonly?}
+                      >
+                        <option value="" selected={
+                          is_nil(Ecto.Changeset.get_field(@changeset, :parent_uuid))
+                        }>
+                          {gettext("— None (top level) —")}
+                        </option>
+                        <%= for {label, value} <- @parent_options do %>
+                          <option
+                            value={value}
+                            selected={Ecto.Changeset.get_field(@changeset, :parent_uuid) == value}
+                          >
+                            {label}
+                          </option>
+                        <% end %>
+                      </select>
+                    </label>
+                    <%= if (msg = parent_uuid_error(@changeset)) do %>
+                      <p class="mt-1 text-sm text-error">{msg}</p>
+                    <% end %>
+                  </div>
+
                   <%!-- Entity Type (Read-only) --%>
                   <div>
                     <.label>{gettext("Entity Type")}</.label>

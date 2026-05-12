@@ -147,6 +147,7 @@ defmodule PhoenixKitEntities.EntityData do
   Validates that entity exists, title is present, and data validates against entity definition.
   Automatically sets date_created on new records.
   """
+  @spec changeset(t() | Ecto.Changeset.t(), map()) :: Ecto.Changeset.t()
   def changeset(entity_data, attrs) do
     entity_data
     |> cast(attrs, [
@@ -697,6 +698,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> PhoenixKitEntities.EntityData.list_all()
       [%PhoenixKitEntities.EntityData{}, ...]
   """
+  @spec list_all(keyword()) :: [t()]
   def list_all(opts \\ []) do
     from(d in __MODULE__,
       order_by: [desc: d.date_created],
@@ -718,6 +720,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> PhoenixKitEntities.EntityData.list_by_entity(entity_uuid)
       [%PhoenixKitEntities.EntityData{}, ...]
   """
+  @spec list_by_entity(binary(), keyword()) :: [t()]
   def list_by_entity(entity_uuid, opts \\ []) when is_binary(entity_uuid) do
     order = resolve_sort_order(entity_uuid, opts)
 
@@ -855,6 +858,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> PhoenixKitEntities.EntityData.list_by_entity_and_status(entity_uuid, "published")
       [%PhoenixKitEntities.EntityData{status: "published"}, ...]
   """
+  @spec list_by_entity_and_status(binary(), String.t(), keyword()) :: [t()]
   def list_by_entity_and_status(entity_uuid, status, opts \\ [])
       when is_binary(entity_uuid) and status in @valid_statuses do
     order = resolve_sort_order(entity_uuid, opts)
@@ -881,6 +885,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> PhoenixKitEntities.EntityData.get("invalid")
       nil
   """
+  @spec get(any(), keyword()) :: t() | nil
   def get(uuid, opts \\ [])
 
   def get(uuid, opts) when is_binary(uuid) do
@@ -909,6 +914,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> PhoenixKitEntities.EntityData.get!("nonexistent-uuid")
       ** (Ecto.NoResultsError)
   """
+  @spec get!(binary(), keyword()) :: t()
   def get!(id, opts \\ []) do
     case get(id, opts) do
       nil -> raise Ecto.NoResultsError, queryable: __MODULE__
@@ -929,6 +935,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> PhoenixKitEntities.EntityData.get_by_slug(entity_uuid, "invalid")
       nil
   """
+  @spec get_by_slug(binary(), String.t(), keyword()) :: t() | nil
   def get_by_slug(entity_uuid, slug, opts \\ [])
       when is_binary(entity_uuid) and is_binary(slug) do
     case repo().get_by(__MODULE__, entity_uuid: entity_uuid, slug: slug) do
@@ -943,6 +950,7 @@ defmodule PhoenixKitEntities.EntityData do
   Queries the JSONB `data` column for `data->lang_code->>'_slug'` matches.
   Used for uniqueness checks on translated slugs.
   """
+  @spec secondary_slug_exists?(binary(), String.t(), String.t(), binary() | nil) :: boolean()
   def secondary_slug_exists?(entity_uuid, lang_code, slug, exclude_record_uuid)
       when is_binary(entity_uuid) do
     query =
@@ -1035,6 +1043,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> next_position(entity_uuid)
       6
   """
+  @spec next_position(binary()) :: non_neg_integer()
   def next_position(entity_uuid) when is_binary(entity_uuid) do
     # FOR UPDATE locks matching rows within a transaction to prevent
     # concurrent creates from reading the same max position.
@@ -1061,6 +1070,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> update_position(record, 3)
       {:ok, %EntityData{position: 3}}
   """
+  @spec update_position(t(), integer()) :: {:ok, t()} | {:error, Ecto.Changeset.t()}
   def update_position(%__MODULE__{} = entity_data, position) when is_integer(position) do
     __MODULE__.update(entity_data, %{position: position})
   end
@@ -1095,6 +1105,8 @@ defmodule PhoenixKitEntities.EntityData do
       iex> bulk_update_positions([{"uuid1", 1}, {"uuid2", 2}, {"uuid3", 3}], entity_uuid: e_uuid)
       :ok
   """
+  @spec bulk_update_positions([{binary(), integer()}], keyword()) ::
+          :ok | {:error, :too_many_uuids | term()}
   def bulk_update_positions(uuid_position_pairs, opts \\ [])
 
   def bulk_update_positions(uuid_position_pairs, opts)
@@ -1154,6 +1166,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> move_to_position(record, 3)
       :ok
   """
+  @spec move_to_position(t(), integer()) :: :ok | {:error, term()}
   def move_to_position(%__MODULE__{} = record, new_position) when is_integer(new_position) do
     entity_uuid = record.entity_uuid
 
@@ -1234,6 +1247,8 @@ defmodule PhoenixKitEntities.EntityData do
       iex> reorder(entity_uuid, ["uuid3", "uuid1", "uuid2"])
       :ok
   """
+  @spec reorder(binary(), [binary()], keyword()) ::
+          :ok | {:error, :too_many_uuids | term()}
   def reorder(entity_uuid, ordered_uuids, opts \\ [])
       when is_binary(entity_uuid) and is_list(ordered_uuids) do
     pairs =
@@ -1287,20 +1302,19 @@ defmodule PhoenixKitEntities.EntityData do
           {:ok, t()}
           | {:error, Ecto.Changeset.t() | :referenced_by_external | :has_children}
   def delete(%__MODULE__{} = entity_data, opts \\ []) do
-    if has_live_children?(entity_data.uuid) do
-      log_data_error_activity(:deleted, opts)
-      {:error, :has_children}
-    else
-      do_delete(entity_data, opts)
-    end
-  end
-
-  defp do_delete(entity_data, opts) do
-    # Null any trashed children's parent_uuid first so the DB-level
-    # self-FK doesn't block the parent's delete. Live children would
-    # have tripped `has_live_children?/1` already.
+    # Fold the child check INSIDE the transaction so a concurrent
+    # insert can't slip a live child between the check and the delete
+    # (which would otherwise trip the DB-level FK and surface as
+    # `:referenced_by_external` instead of the more accurate
+    # `:has_children`).
     txn =
       repo().transaction(fn ->
+        if has_live_children?(entity_data.uuid) do
+          repo().rollback(:has_children)
+        end
+
+        # Null any trashed children's parent_uuid first so the DB-level
+        # self-FK doesn't block the parent's delete.
         nullify_trashed_children([entity_data.uuid])
 
         case repo().delete(entity_data) do
@@ -1312,6 +1326,10 @@ defmodule PhoenixKitEntities.EntityData do
     case txn do
       {:ok, deleted} ->
         notify_data_event({:ok, deleted}, :deleted, opts)
+
+      {:error, :has_children} ->
+        log_data_error_activity(:deleted, opts)
+        {:error, :has_children}
 
       {:error, %Ecto.Changeset{} = changeset} ->
         {:error, changeset}
@@ -1468,6 +1486,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> PhoenixKitEntities.EntityData.change(record)
       %Ecto.Changeset{data: %PhoenixKitEntities.EntityData{}}
   """
+  @spec change(t(), map()) :: Ecto.Changeset.t()
   def change(%__MODULE__{} = entity_data, attrs \\ %{}) do
     changeset(entity_data, attrs)
   end
@@ -1486,6 +1505,8 @@ defmodule PhoenixKitEntities.EntityData do
       iex> PhoenixKitEntities.EntityData.search_by_title("Acme", entity_uuid, lang: "es")
       [%PhoenixKitEntities.EntityData{}, ...]
   """
+  @spec search_by_title(String.t()) :: [t()]
+  @spec search_by_title(String.t(), binary() | nil, keyword()) :: [t()]
   def search_by_title(search_term) when is_binary(search_term),
     do: search_by_title(search_term, nil, [])
 
@@ -1526,6 +1547,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> PhoenixKitEntities.EntityData.published_records(entity_uuid)
       [%PhoenixKitEntities.EntityData{status: "published"}, ...]
   """
+  @spec published_records(binary(), keyword()) :: [t()]
   def published_records(entity_uuid, opts \\ []) when is_binary(entity_uuid) do
     list_by_entity_and_status(entity_uuid, "published", opts)
   end
@@ -1544,6 +1566,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> PhoenixKitEntities.EntityData.count_by_entity(entity_uuid, include_trashed: true)
       45
   """
+  @spec count_by_entity(binary(), keyword()) :: non_neg_integer()
   def count_by_entity(entity_uuid, opts \\ []) when is_binary(entity_uuid) do
     from(d in __MODULE__, where: d.entity_uuid == ^entity_uuid, select: count(d.uuid))
     |> exclude_trashed(opts)
@@ -1574,6 +1597,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> PhoenixKitEntities.EntityData.filter_by_status("draft")
       [%PhoenixKitEntities.EntityData{status: "draft"}, ...]
   """
+  @spec filter_by_status(String.t(), keyword()) :: [t()]
   def filter_by_status(status, opts \\ []) when status in @valid_statuses do
     from(d in __MODULE__,
       where: d.status == ^status,
@@ -1774,21 +1798,26 @@ defmodule PhoenixKitEntities.EntityData do
   @doc """
   Alias for list_all/1 for consistency with LiveView naming.
   """
+  @spec list_all_data(keyword()) :: [t()]
   def list_all_data(opts \\ []), do: list_all(opts)
 
   @doc """
   Alias for list_by_entity/2 for consistency with LiveView naming.
   """
+  @spec list_data_by_entity(binary(), keyword()) :: [t()]
   def list_data_by_entity(entity_uuid, opts \\ []), do: list_by_entity(entity_uuid, opts)
 
   @doc """
   Alias for filter_by_status/2 for consistency with LiveView naming.
   """
+  @spec list_data_by_status(String.t(), keyword()) :: [t()]
   def list_data_by_status(status, opts \\ []), do: filter_by_status(status, opts)
 
   @doc """
   Alias for search_by_title for consistency with LiveView naming.
   """
+  @spec search_data(String.t()) :: [t()]
+  @spec search_data(String.t(), binary() | nil, keyword()) :: [t()]
   def search_data(search_term) when is_binary(search_term),
     do: search_by_title(search_term, nil, [])
 
@@ -1798,6 +1827,7 @@ defmodule PhoenixKitEntities.EntityData do
   @doc """
   Alias for get!/2 for consistency with LiveView naming.
   """
+  @spec get_data!(binary(), keyword()) :: t()
   def get_data!(id, opts \\ []), do: get!(id, opts)
 
   @doc """
@@ -1977,19 +2007,8 @@ defmodule PhoenixKitEntities.EntityData do
           {non_neg_integer(), nil}
           | {:error, :referenced_by_external | :has_children}
   def bulk_delete(uuids, opts \\ []) when is_list(uuids) do
-    if has_external_live_children?(uuids) do
-      log_data_error_activity(:bulk_deleted, opts)
-      {:error, :has_children}
-    else
-      do_bulk_delete(uuids, opts)
-    end
-  end
-
-  defp do_bulk_delete(uuids, opts) do
-    # Wrap ONLY the transaction in the rescue so an `ActivityLog.log`
-    # failure can't be misclassified as `:referenced_by_external`. The
-    # transaction itself returns `{:error, _}` on rollback; raised
-    # Postgrex errors are the FK / NOT NULL paths.
+    # Wrap the activity-log call OUTSIDE the transaction so a logging
+    # failure can't be misclassified as `:referenced_by_external`.
     case run_bulk_delete_txn(uuids) do
       {:ok, {count, _} = result} ->
         PhoenixKitEntities.ActivityLog.log(%{
@@ -2005,6 +2024,10 @@ defmodule PhoenixKitEntities.EntityData do
 
         result
 
+      {:error, :has_children} ->
+        log_data_error_activity(:bulk_deleted, opts)
+        {:error, :has_children}
+
       {:error, _} ->
         log_data_error_activity(:bulk_deleted, opts)
         {:error, :referenced_by_external}
@@ -2013,9 +2036,15 @@ defmodule PhoenixKitEntities.EntityData do
 
   defp run_bulk_delete_txn(uuids) do
     repo().transaction(fn ->
+      # Fold the check inside the transaction so a concurrent insert
+      # can't land a live external child between the check and the
+      # delete.
+      if has_external_live_children?(uuids) do
+        repo().rollback(:has_children)
+      end
+
       # Null trashed children of any row in the input set before
-      # deleting, so the self-FK doesn't block. Live external
-      # children would have tripped `has_external_live_children?/1`.
+      # deleting, so the self-FK doesn't block.
       nullify_trashed_children(uuids)
 
       from(d in __MODULE__, where: d.uuid in ^uuids)
@@ -2149,6 +2178,13 @@ defmodule PhoenixKitEntities.EntityData do
         trashed_records: 3
       }
   """
+  @spec get_data_stats(binary() | nil) :: %{
+          total_records: non_neg_integer(),
+          published_records: non_neg_integer(),
+          draft_records: non_neg_integer(),
+          archived_records: non_neg_integer(),
+          trashed_records: non_neg_integer()
+        }
   def get_data_stats(entity_uuid \\ nil) do
     query =
       from(d in __MODULE__,
@@ -2199,6 +2235,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> get_translation(flat_record, "en-US")
       %{"name" => "Acme", "category" => "Tech"}
   """
+  @spec get_translation(t(), String.t()) :: map()
   def get_translation(%__MODULE__{data: data}, lang_code) when is_binary(lang_code) do
     Multilang.get_language_data(data, lang_code)
   end
@@ -2214,6 +2251,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> get_raw_translation(record, "es-ES")
       %{"name" => "Acme España"}
   """
+  @spec get_raw_translation(t(), String.t()) :: map()
   def get_raw_translation(%__MODULE__{data: data}, lang_code) when is_binary(lang_code) do
     Multilang.get_raw_language_data(data, lang_code)
   end
@@ -2232,6 +2270,7 @@ defmodule PhoenixKitEntities.EntityData do
         "es-ES" => %{"name" => "Acme España", "category" => "Tech"}
       }
   """
+  @spec get_all_translations(t()) :: %{optional(String.t()) => map()}
   def get_all_translations(%__MODULE__{data: data}) do
     if Multilang.multilang_data?(data) do
       Multilang.enabled_languages()
@@ -2257,6 +2296,8 @@ defmodule PhoenixKitEntities.EntityData do
       iex> set_translation(record, "en-US", %{"name" => "Acme Corp", "category" => "Tech"})
       {:ok, %EntityData{}}
   """
+  @spec set_translation(t(), String.t(), map()) ::
+          {:ok, t()} | {:error, Ecto.Changeset.t()}
   def set_translation(%__MODULE__{} = entity_data, lang_code, field_data)
       when is_binary(lang_code) and is_map(field_data) do
     updated_data = Multilang.put_language_data(entity_data.data, lang_code, field_data)
@@ -2277,6 +2318,9 @@ defmodule PhoenixKitEntities.EntityData do
       iex> remove_translation(record, "en-US")
       {:error, :cannot_remove_primary}
   """
+  @spec remove_translation(t(), String.t()) ::
+          {:ok, t()}
+          | {:error, :cannot_remove_primary | :not_multilang | Ecto.Changeset.t()}
   def remove_translation(%__MODULE__{data: data} = entity_data, lang_code)
       when is_binary(lang_code) do
     if Multilang.multilang_data?(data) do
@@ -2308,6 +2352,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> get_title_translation(record, "es-ES")
       "Mi Producto"
   """
+  @spec get_title_translation(t(), String.t()) :: String.t() | nil
   def get_title_translation(%__MODULE__{} = entity_data, lang_code)
       when is_binary(lang_code) do
     case Multilang.get_language_data(entity_data.data, lang_code) do
@@ -2337,6 +2382,8 @@ defmodule PhoenixKitEntities.EntityData do
       iex> set_title_translation(record, "en-US", "My Product")
       {:ok, %EntityData{}}
   """
+  @spec set_title_translation(t(), String.t(), String.t()) ::
+          {:ok, t()} | {:error, Ecto.Changeset.t()}
   def set_title_translation(%__MODULE__{} = entity_data, lang_code, title)
       when is_binary(lang_code) and is_binary(title) do
     # Merge _title into existing raw overrides to preserve other fields
@@ -2362,6 +2409,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> get_all_title_translations(record)
       %{"en-US" => "My Product", "es-ES" => "Mi Producto", "fr-FR" => "Mon Produit"}
   """
+  @spec get_all_title_translations(t()) :: %{optional(String.t()) => String.t() | nil}
   def get_all_title_translations(%__MODULE__{} = entity_data) do
     Multilang.enabled_languages()
     |> Map.new(fn lang ->

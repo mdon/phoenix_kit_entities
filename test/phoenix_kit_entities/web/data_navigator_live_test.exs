@@ -489,6 +489,41 @@ defmodule PhoenixKitEntities.Web.DataNavigatorLiveTest do
       )
     end
 
+    test "permanent_delete flashes :has_children when the trashed row has a live child",
+         %{conn: conn} = ctx do
+      [parent | _] = ctx.records
+
+      # Live child that points at the parent we're about to trash.
+      {:ok, _child} =
+        EntityData.create(
+          %{
+            entity_uuid: ctx.entity.uuid,
+            title: "Child of #{parent.title}",
+            status: "published",
+            parent_uuid: parent.uuid,
+            created_by_uuid: ctx.actor_uuid
+          },
+          actor_uuid: ctx.actor_uuid
+        )
+
+      {:ok, _} = EntityData.trash(parent, actor_uuid: ctx.actor_uuid)
+
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, navigator_url(ctx.entity, status: "trashed"))
+
+      render_hook(view, "permanent_delete", %{"uuid" => parent.uuid})
+
+      assert render(view) =~ "has child records"
+      assert %EntityData{status: "trashed"} = EntityData.get(parent.uuid)
+
+      # Error-branch audit pins the user-initiated action even though
+      # the DB rolled back.
+      assert_activity_logged("entity_data.deleted",
+        actor_uuid: ctx.actor_uuid,
+        metadata_has: %{"db_pending" => true}
+      )
+    end
+
     test "bulk_action 'permanent_delete' hard-deletes selected trashed records",
          %{conn: conn} = ctx do
       [r1, r2, _r3] = ctx.records

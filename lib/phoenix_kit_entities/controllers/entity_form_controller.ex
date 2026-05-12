@@ -534,15 +534,38 @@ defmodule PhoenixKitEntities.Controllers.EntityFormController do
     end)
   end
 
+  # Honor the Referer header only when it points back at the same host
+  # we're serving from. The header is attacker-controllable (any page
+  # can link/post here with a crafted Referer), so passing it raw into
+  # `redirect(external: …)` was an open-redirect surface — phishing
+  # bait that bounces through this app's domain. We parse it, require
+  # an http/https scheme + host match against `conn.host`, and emit a
+  # path-only relative redirect with the host stripped. Anything that
+  # doesn't pass falls back to "/".
   defp redirect_back(conn, _fallback_conn) do
-    referer = get_req_header(conn, "referer") |> List.first()
-
-    if referer do
-      redirect(conn, external: referer)
-    else
-      redirect(conn, to: "/")
+    case get_req_header(conn, "referer") |> List.first() do
+      nil -> redirect(conn, to: "/")
+      referer -> redirect(conn, to: safe_referer_path(referer, conn.host) || "/")
     end
   end
+
+  defp safe_referer_path(referer, expected_host) when is_binary(referer) do
+    case URI.parse(referer) do
+      %URI{scheme: scheme, host: ^expected_host, path: path}
+      when scheme in ["http", "https"] and is_binary(path) ->
+        # Reattach query so the user lands back exactly where they
+        # came from (filters, scroll position, etc).
+        case URI.parse(referer).query do
+          nil -> path
+          q -> path <> "?" <> q
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp safe_referer_path(_, _), do: nil
 
   # Form statistics tracking
   # Stats are stored in entity.settings under "public_form_stats".

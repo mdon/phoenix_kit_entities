@@ -275,6 +275,142 @@ defmodule PhoenixKitEntities.Web.DataFormLiveTest do
     end
   end
 
+  describe "parent picker" do
+    setup ctx do
+      # Build a 3-deep chain in ctx.entity: A → B → C
+      {:ok, a} =
+        EntityData.create(
+          %{
+            entity_uuid: ctx.entity.uuid,
+            title: "A",
+            status: "published",
+            created_by_uuid: ctx.actor_uuid
+          },
+          actor_uuid: ctx.actor_uuid
+        )
+
+      {:ok, b} =
+        EntityData.create(
+          %{
+            entity_uuid: ctx.entity.uuid,
+            title: "B",
+            status: "published",
+            parent_uuid: a.uuid,
+            created_by_uuid: ctx.actor_uuid
+          },
+          actor_uuid: ctx.actor_uuid
+        )
+
+      {:ok, c} =
+        EntityData.create(
+          %{
+            entity_uuid: ctx.entity.uuid,
+            title: "C",
+            status: "published",
+            parent_uuid: b.uuid,
+            created_by_uuid: ctx.actor_uuid
+          },
+          actor_uuid: ctx.actor_uuid
+        )
+
+      {:ok, other_entity} =
+        Entities.create_entity(
+          %{
+            name: "df_other",
+            display_name: "Other",
+            display_name_plural: "Others",
+            fields_definition: [],
+            status: "published",
+            created_by_uuid: ctx.actor_uuid
+          },
+          actor_uuid: ctx.actor_uuid
+        )
+
+      {:ok, other_record} =
+        EntityData.create(
+          %{
+            entity_uuid: other_entity.uuid,
+            title: "From other entity",
+            status: "published",
+            created_by_uuid: ctx.actor_uuid
+          },
+          actor_uuid: ctx.actor_uuid
+        )
+
+      {:ok, a: a, b: b, c: c, other_entity: other_entity, other_record: other_record}
+    end
+
+    test "happy path — saving with a valid same-entity parent persists parent_uuid",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, edit_url(ctx.entity, ctx.record))
+
+      view
+      |> form("form", phoenix_kit_entity_data: %{parent_uuid: ctx.a.uuid})
+      |> render_submit()
+
+      assert EntityData.get(ctx.record.uuid).parent_uuid == ctx.a.uuid
+    end
+
+    # For the three rejection tests below, `Phoenix.LiveViewTest.form/3`
+    # validates submitted select values against the picker's rendered
+    # options — which is exactly what the LV does for happy users.
+    # These tests simulate a bypass attempt (custom client / crafted
+    # payload) by firing the "save" event directly so the changeset
+    # layer's validations are what's exercised, not the form helper.
+    test "rejects self-parent — record cannot be its own parent",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, edit_url(ctx.entity, ctx.record))
+
+      render_hook(view, "save", %{
+        "phoenix_kit_entity_data" => %{"parent_uuid" => ctx.record.uuid}
+      })
+
+      assert is_nil(EntityData.get(ctx.record.uuid).parent_uuid)
+    end
+
+    test "rejects a parent from a different entity",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, edit_url(ctx.entity, ctx.record))
+
+      render_hook(view, "save", %{
+        "phoenix_kit_entity_data" => %{"parent_uuid" => ctx.other_record.uuid}
+      })
+
+      assert is_nil(EntityData.get(ctx.record.uuid).parent_uuid)
+    end
+
+    test "rejects a parent that is the record's descendant (cycle)",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, edit_url(ctx.entity, ctx.a))
+
+      # A → C would form A→C→B→A.
+      render_hook(view, "save", %{
+        "phoenix_kit_entity_data" => %{"parent_uuid" => ctx.c.uuid}
+      })
+
+      assert is_nil(EntityData.get(ctx.a.uuid).parent_uuid)
+    end
+
+    test "clearing parent_uuid (selecting None) persists nil",
+         %{conn: conn} = ctx do
+      {:ok, _} = EntityData.update(ctx.record, %{parent_uuid: ctx.a.uuid})
+      assert EntityData.get(ctx.record.uuid).parent_uuid == ctx.a.uuid
+
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, edit_url(ctx.entity, ctx.record))
+
+      view
+      |> form("form", phoenix_kit_entity_data: %{parent_uuid: ""})
+      |> render_submit()
+
+      assert is_nil(EntityData.get(ctx.record.uuid).parent_uuid)
+    end
+  end
+
   # ── helpers ──────────────────────────────────────────────────
 
   defp edit_url(entity, record),

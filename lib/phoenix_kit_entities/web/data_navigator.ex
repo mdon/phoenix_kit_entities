@@ -365,6 +365,10 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
           {:noreply,
            put_flash(socket, :error, PhoenixKitEntities.Errors.message(:referenced_by_external))}
 
+        {:error, :has_children} ->
+          {:noreply,
+           put_flash(socket, :error, PhoenixKitEntities.Errors.message(:has_children))}
+
         {:error, _} ->
           {:noreply, put_flash(socket, :error, gettext("Failed to delete record"))}
       end
@@ -612,6 +616,10 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
         # retry without re-checking each box.
         {:noreply,
          put_flash(socket, :error, PhoenixKitEntities.Errors.message(:referenced_by_external))}
+
+      {:error, :has_children} ->
+        {:noreply,
+         put_flash(socket, :error, PhoenixKitEntities.Errors.message(:has_children))}
     end
   end
 
