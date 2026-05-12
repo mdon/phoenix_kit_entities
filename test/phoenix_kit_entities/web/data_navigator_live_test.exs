@@ -65,9 +65,12 @@ defmodule PhoenixKitEntities.Web.DataNavigatorLiveTest do
       conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
       {:ok, view, _html} = live(conn, navigator_url(ctx.entity))
 
+      # Table view renders actions inside `<.table_row_menu>`; scope to
+      # the menu's unique id so the card view's inline button doesn't
+      # match too.
       view
       |> element(
-        "button[phx-click='archive_data'][phx-value-uuid='#{record.uuid}'][data-tip='Archive']"
+        "#data-menu-#{record.uuid} button[phx-click='archive_data']"
       )
       |> render_click()
 
@@ -92,7 +95,7 @@ defmodule PhoenixKitEntities.Web.DataNavigatorLiveTest do
 
       view
       |> element(
-        "button[phx-click='restore_data'][phx-value-uuid='#{record.uuid}'][data-tip='Restore']"
+        "#data-menu-#{record.uuid} button[phx-click='restore_data']"
       )
       |> render_click()
 
@@ -110,9 +113,20 @@ defmodule PhoenixKitEntities.Web.DataNavigatorLiveTest do
       conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
       {:ok, _view, html} = live(conn, navigator_url(ctx.entity))
 
-      # delta-pin C5: archive button has phx-disable-with attr.
-      assert html =~
-               ~r/phx-click="archive_data"[^>]*phx-value-uuid="#{record.uuid}"[^>]*phx-disable-with=/
+      # delta-pin C5: archive button has phx-disable-with attr. The
+      # button now lives inside `<.table_row_menu>`; isolate the menu's
+      # subtree for this record (scoped by its id) and assert both
+      # signals appear inside it. `:global` attrs aren't source-ordered
+      # so we don't pin them to a single tag.
+      menu_id = "data-menu-#{record.uuid}"
+
+      menu_html =
+        Regex.run(~r/<div id="#{menu_id}".*?<\/div>/s, html)
+        |> List.first()
+
+      assert is_binary(menu_html), "expected dropdown markup for #{menu_id}"
+      assert menu_html =~ ~s(phx-click="archive_data")
+      assert menu_html =~ "phx-disable-with="
     end
   end
 

@@ -105,30 +105,44 @@ defmodule PhoenixKitEntities.Web.Entities do
     end
   end
 
-  def handle_event("reorder_entities", %{"ordered_ids" => ordered_ids}, socket)
+  def handle_event("reorder_entities", %{"ordered_ids" => ordered_ids} = params, socket)
       when is_list(ordered_ids) do
+    # `moved_id` rides along on the JS side — push it back as a
+    # `sortable:flash` so the SortableGrid hook flashes the dropped
+    # row green on success / red on failure. Matches the
+    # `phoenix_kit_projects` reorder convention.
+    moved_id = params["moved_id"]
+
     if Scope.admin?(socket.assigns.phoenix_kit_current_scope) do
       case Entities.reorder_entities(ordered_ids, actor_opts(socket)) do
         :ok ->
           {:noreply,
-           assign(
-             socket,
+           socket
+           |> assign(
              :entities,
              Entities.list_entities(lang: socket.assigns[:current_locale])
-           )}
+           )
+           |> push_event("sortable:flash", %{uuid: moved_id, status: "ok"})}
 
         {:error, _reason} ->
-          {:noreply, put_flash(socket, :error, gettext("Failed to save the new order"))}
+          {:noreply,
+           socket
+           |> put_flash(:error, gettext("Failed to save the new order"))
+           |> push_event("sortable:flash", %{uuid: moved_id, status: "error"})}
       end
     else
-      {:noreply, put_flash(socket, :error, gettext("Not authorized"))}
+      {:noreply,
+       socket
+       |> put_flash(:error, gettext("Not authorized"))
+       |> push_event("sortable:flash", %{uuid: moved_id, status: "error"})}
     end
   end
 
   # Defensive catch-all: a stale browser tab or a custom client could
   # push a malformed `reorder_entities` payload (missing `ordered_ids`
   # or wrong type). Flash + no-op rather than crash the LV socket
-  # with a MatchError.
+  # with a MatchError. No `sortable:flash` here — without a `moved_id`
+  # the hook can't key the highlight to a row anyway.
   def handle_event("reorder_entities", _params, socket) do
     {:noreply, put_flash(socket, :error, gettext("Failed to save the new order"))}
   end
@@ -255,7 +269,9 @@ defmodule PhoenixKitEntities.Web.Entities do
                     <.table_default_header_cell>{gettext("Status")}</.table_default_header_cell>
                     <.table_default_header_cell>{gettext("Fields")}</.table_default_header_cell>
                     <.table_default_header_cell>{gettext("Created")}</.table_default_header_cell>
-                    <.table_default_header_cell>{gettext("Actions")}</.table_default_header_cell>
+                    <.table_default_header_cell class="w-px whitespace-nowrap text-right">
+                      {gettext("Actions")}
+                    </.table_default_header_cell>
                   </.table_default_row>
                 </.table_default_header>
                 <tbody
@@ -264,13 +280,15 @@ defmodule PhoenixKitEntities.Web.Entities do
                   data-sortable-event="reorder_entities"
                   data-sortable-items=".sortable-item"
                   data-sortable-hide-source="false"
+                  data-sortable-handle=".pk-drag-handle"
                   phx-hook="SortableGrid"
                 >
                   <%= for entity <- @entities do %>
                     <.table_default_row class="sortable-item" data-id={entity.uuid}>
                       <.table_default_cell
                         :if={length(@entities) > 1}
-                        class="cursor-grab active:cursor-grabbing text-base-content/40"
+                        class="pk-drag-handle cursor-grab active:cursor-grabbing text-base-content/30 hover:text-base-content/70 transition-colors"
+                        title={gettext("Drag to reorder")}
                       >
                         <.icon name="hero-bars-3" class="w-4 h-4" />
                       </.table_default_cell>
@@ -323,55 +341,44 @@ defmodule PhoenixKitEntities.Web.Entities do
                           {PhoenixKit.Utils.Date.format_date_with_user_format(entity.date_created)}
                         </span>
                       </.table_default_cell>
-                      <.table_default_cell>
-                        <div class="flex gap-2">
-                          <.link
+                      <.table_default_cell class="text-right whitespace-nowrap">
+                        <.table_row_menu mode="auto" id={"entity-menu-#{entity.uuid}"}>
+                          <.table_row_menu_link
                             navigate={
                               PhoenixKit.Utils.Routes.locale_aware_path(
                                 assigns,
                                 "/admin/entities/#{entity.name}/data"
                               )
                             }
-                            class="btn btn-xs btn-outline btn-info tooltip tooltip-bottom"
-                            data-tip={gettext("Go to Data")}
-                          >
-                            <.icon name="hero-arrow-right" class="w-4 h-4 hidden sm:inline" />
-                            <span class="sm:hidden whitespace-nowrap">{gettext("Go to Data")}</span>
-                          </.link>
-                          <.link
+                            icon="hero-arrow-right"
+                            label={gettext("Go to Data")}
+                          />
+                          <.table_row_menu_link
                             navigate={
                               PhoenixKit.Utils.Routes.path("/admin/entities/#{entity.uuid}/edit")
                             }
-                            class="btn btn-xs btn-outline btn-info tooltip tooltip-bottom"
-                            data-tip={gettext("Edit")}
-                          >
-                            <.icon name="hero-pencil" class="w-4 h-4 hidden sm:inline" />
-                            <span class="sm:hidden whitespace-nowrap">{gettext("Edit")}</span>
-                          </.link>
+                            icon="hero-pencil"
+                            label={gettext("Edit")}
+                          />
+                          <.table_row_menu_divider />
                           <%= if entity.status == "archived" do %>
-                            <button
-                              class="btn btn-xs btn-outline btn-info tooltip tooltip-bottom text-success"
+                            <.table_row_menu_button
                               phx-click="restore_entity"
                               phx-value-uuid={entity.uuid}
                               phx-disable-with={gettext("…")}
-                              data-tip={gettext("Restore")}
-                            >
-                              <.icon name="hero-arrow-path" class="w-4 h-4 hidden sm:inline" />
-                              <span class="sm:hidden whitespace-nowrap">{gettext("Restore")}</span>
-                            </button>
+                              icon="hero-arrow-path"
+                              label={gettext("Restore")}
+                            />
                           <% else %>
-                            <button
-                              class="btn btn-xs btn-outline btn-info tooltip tooltip-bottom text-error"
+                            <.table_row_menu_button
                               phx-click="archive_entity"
                               phx-value-uuid={entity.uuid}
                               phx-disable-with={gettext("…")}
-                              data-tip={gettext("Archive")}
-                            >
-                              <.icon name="hero-trash" class="w-4 h-4 hidden sm:inline" />
-                              <span class="sm:hidden whitespace-nowrap">{gettext("Archive")}</span>
-                            </button>
+                              icon="hero-trash"
+                              label={gettext("Archive")}
+                            />
                           <% end %>
-                        </div>
+                        </.table_row_menu>
                       </.table_default_cell>
                     </.table_default_row>
                   <% end %>
@@ -388,13 +395,22 @@ defmodule PhoenixKitEntities.Web.Entities do
               item_id={&(&1.uuid)}
               on_reorder="reorder_entities"
               draggable={length(@entities) > 1}
+              sortable_handle=".pk-drag-handle"
               layout={:grid}
               cols={1}
               gap="gap-6"
               class="md:grid-cols-2 lg:grid-cols-3"
             >
               <:item :let={entity}>
-                <div class="card bg-base-100 shadow-xl hover:shadow-2xl transition-shadow h-full">
+                <div class="card bg-base-100 shadow-xl hover:shadow-2xl transition-shadow h-full group/card relative">
+                  <%= if length(@entities) > 1 do %>
+                    <div
+                      class="pk-drag-handle absolute top-2 left-2 cursor-grab active:cursor-grabbing text-base-content/0 group-hover/card:text-base-content/50 transition-colors"
+                      title={gettext("Drag to reorder")}
+                    >
+                      <.icon name="hero-bars-3" class="w-5 h-5" />
+                    </div>
+                  <% end %>
                   <div class="card-body">
                     <div class="flex items-start justify-between mb-4">
                       <.link
@@ -450,41 +466,40 @@ defmodule PhoenixKitEntities.Web.Entities do
 
                     <%!-- Actions --%>
                     <div class="card-actions justify-end">
-                      <.link
-                        navigate={PhoenixKit.Utils.Routes.path("/admin/entities/#{entity.name}/data")}
-                        class="btn btn-outline btn-sm"
-                      >
-                        <.icon name="hero-arrow-right" class="w-4 h-4 mr-1" /> {gettext("Go to Data")}
-                      </.link>
-                      <.link
-                        navigate={PhoenixKit.Utils.Routes.path("/admin/entities/#{entity.uuid}/edit")}
-                        class="btn btn-primary btn-sm"
-                      >
-                        <.icon name="hero-pencil" class="w-4 h-4 mr-1" /> {gettext("Edit")}
-                      </.link>
-
-                      <%!-- Archive/Restore Button --%>
-                      <%= if entity.status == "archived" do %>
-                        <button
-                          class="btn btn-success btn-sm"
-                          phx-click="restore_entity"
-                          phx-value-uuid={entity.uuid}
-                          phx-disable-with={gettext("…")}
-                          title={gettext("Restore entity")}
-                        >
-                          <.icon name="hero-arrow-path" class="w-4 h-4" />
-                        </button>
-                      <% else %>
-                        <button
-                          class="btn btn-error btn-sm"
-                          phx-click="archive_entity"
-                          phx-value-uuid={entity.uuid}
-                          phx-disable-with={gettext("…")}
-                          title={gettext("Archive entity")}
-                        >
-                          <.icon name="hero-trash" class="w-4 h-4" />
-                        </button>
-                      <% end %>
+                      <.table_row_menu mode="auto" id={"entity-card-menu-#{entity.uuid}"}>
+                        <.table_row_menu_link
+                          navigate={
+                            PhoenixKit.Utils.Routes.path("/admin/entities/#{entity.name}/data")
+                          }
+                          icon="hero-arrow-right"
+                          label={gettext("Go to Data")}
+                        />
+                        <.table_row_menu_link
+                          navigate={
+                            PhoenixKit.Utils.Routes.path("/admin/entities/#{entity.uuid}/edit")
+                          }
+                          icon="hero-pencil"
+                          label={gettext("Edit")}
+                        />
+                        <.table_row_menu_divider />
+                        <%= if entity.status == "archived" do %>
+                          <.table_row_menu_button
+                            phx-click="restore_entity"
+                            phx-value-uuid={entity.uuid}
+                            phx-disable-with={gettext("…")}
+                            icon="hero-arrow-path"
+                            label={gettext("Restore")}
+                          />
+                        <% else %>
+                          <.table_row_menu_button
+                            phx-click="archive_entity"
+                            phx-value-uuid={entity.uuid}
+                            phx-disable-with={gettext("…")}
+                            icon="hero-trash"
+                            label={gettext("Archive")}
+                          />
+                        <% end %>
+                      </.table_row_menu>
                     </div>
 
                     <%!-- Created Date --%>

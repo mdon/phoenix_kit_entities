@@ -52,6 +52,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
       |> assign(:search_term, "")
       |> assign(:view_mode, "table")
       |> assign(:entity_data_records, [])
+      |> assign(:record_depths, %{})
 
     {:ok, socket}
   end
@@ -410,17 +411,25 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
     end
   end
 
-  def handle_event("reorder_records", %{"ordered_ids" => ordered_ids}, socket)
+  def handle_event("reorder_records", %{"ordered_ids" => ordered_ids} = params, socket)
       when is_list(ordered_ids) do
+    # `moved_id` rides along on the JS side — push it back as a
+    # `sortable:flash` so the SortableGrid hook flashes the dropped
+    # row green on success / red on failure.
+    moved_id = params["moved_id"]
+
     cond do
       not Scope.admin?(socket.assigns.phoenix_kit_current_scope) ->
-        {:noreply, put_flash(socket, :error, gettext("Not authorized"))}
+        {:noreply,
+         socket
+         |> put_flash(:error, gettext("Not authorized"))
+         |> push_event("sortable:flash", %{uuid: moved_id, status: "error"})}
 
       is_nil(socket.assigns.selected_entity) or is_nil(socket.assigns.selected_entity_uuid) ->
         {:noreply, socket}
 
       true ->
-        apply_record_reorder(socket, ordered_ids)
+        apply_record_reorder(socket, ordered_ids, moved_id)
     end
   end
 
@@ -600,7 +609,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
     end
   end
 
-  defp apply_record_reorder(socket, ordered_ids) do
+  defp apply_record_reorder(socket, ordered_ids, moved_id) do
     {entity, sort_flipped?} = ensure_manual_sort(socket.assigns.selected_entity)
     entity_uuid = socket.assigns.selected_entity_uuid
 
@@ -610,6 +619,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
           socket
           |> assign(:selected_entity, entity)
           |> apply_filters()
+          |> push_event("sortable:flash", %{uuid: moved_id, status: "ok"})
 
         socket =
           if sort_flipped? == :failed do
@@ -627,7 +637,10 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
         {:noreply, socket}
 
       _ ->
-        {:noreply, put_flash(socket, :error, gettext("Failed to save the new order"))}
+        {:noreply,
+         socket
+         |> put_flash(:error, gettext("Failed to save the new order"))
+         |> push_event("sortable:flash", %{uuid: moved_id, status: "error"})}
     end
   end
 
@@ -790,11 +803,49 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
         do: [sort_mode: Entities.get_sort_mode(entity), lang: socket.assigns[:current_locale]],
         else: [lang: socket.assigns[:current_locale]]
 
-    entity_data_records =
+    raw_records =
       fetch_records(entity_uuid, status, sort_opts)
       |> filter_by_search(search_term)
 
-    assign(socket, :entity_data_records, entity_data_records)
+    {records, depths} = maybe_tree_order(raw_records, entity_uuid, status, search_term)
+
+    socket
+    |> assign(:entity_data_records, records)
+    |> assign(:record_depths, depths)
+  end
+
+  # Tree-order rows only when the view is showing a coherent slice of
+  # one entity. A status filter or a search term carves the set in
+  # half, leaving parents pointing at rows that aren't in the result —
+  # in that case fall back to flat sibling order and zero depths so
+  # the template renders without indentation.
+  defp maybe_tree_order(records, entity_uuid, "all", "")
+       when is_binary(entity_uuid) and records != [] do
+    {tree_records, depth_map} = tree_order(records)
+    {tree_records, depth_map}
+  end
+
+  defp maybe_tree_order(records, _entity_uuid, _status, _search) do
+    {records, %{}}
+  end
+
+  defp tree_order(rows) do
+    known = MapSet.new(rows, & &1.uuid)
+    by_parent = Enum.group_by(rows, & &1.parent_uuid)
+
+    roots =
+      Enum.filter(rows, fn row ->
+        is_nil(row.parent_uuid) or not MapSet.member?(known, row.parent_uuid)
+      end)
+
+    flat = Enum.flat_map(roots, &walk_for_navigator(&1, by_parent, 0))
+    depths = Map.new(flat, fn {row, d} -> {row.uuid, d} end)
+    {Enum.map(flat, &elem(&1, 0)), depths}
+  end
+
+  defp walk_for_navigator(row, by_parent, depth) do
+    children = Map.get(by_parent, row.uuid, [])
+    [{row, depth} | Enum.flat_map(children, &walk_for_navigator(&1, by_parent, depth + 1))]
   end
 
   # When an entity is selected, use sort-mode-aware queries
@@ -1409,7 +1460,9 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                   <% end %>
                   <.table_default_header_cell>{gettext("Status")}</.table_default_header_cell>
                   <.table_default_header_cell>{gettext("Created")}</.table_default_header_cell>
-                  <.table_default_header_cell>{gettext("Actions")}</.table_default_header_cell>
+                  <.table_default_header_cell class="w-px whitespace-nowrap text-right">
+                    {gettext("Actions")}
+                  </.table_default_header_cell>
                 </.table_default_row>
               </.table_default_header>
               <tbody
@@ -1418,6 +1471,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                 data-sortable-event="reorder_records"
                 data-sortable-items=".sortable-item"
                 data-sortable-hide-source="false"
+                data-sortable-handle=".pk-drag-handle"
                 phx-hook={if @selected_entity, do: "SortableGrid"}
               >
                 <%= for data_record <- @entity_data_records do %>
@@ -1427,7 +1481,8 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                   >
                     <.table_default_cell
                       :if={@selected_entity && length(@entity_data_records) > 1}
-                      class="cursor-grab active:cursor-grabbing text-base-content/40"
+                      class="pk-drag-handle cursor-grab active:cursor-grabbing text-base-content/30 hover:text-base-content/70 transition-colors"
+                      title={gettext("Drag to reorder")}
                     >
                       <.icon name="hero-bars-3" class="w-4 h-4" />
                     </.table_default_cell>
@@ -1449,7 +1504,12 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                         }
                         class="block hover:text-primary transition-colors cursor-pointer"
                       >
-                        <div class="font-bold">{data_record.title}</div>
+                        <div class="font-bold">
+                          <%= if (depth = Map.get(@record_depths, data_record.uuid, 0)) > 0 do %>
+                            <span class="opacity-60 mr-1">{String.duplicate("— ", depth)}</span>
+                          <% end %>
+                          {data_record.title}
+                        </div>
                         <%= if data_record.slug do %>
                           <div class="text-sm opacity-50">
                             <.icon name="hero-link" class="w-3 h-3 inline" />
@@ -1481,103 +1541,80 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                         </div>
                       <% end %>
                     </.table_default_cell>
-                    <.table_default_cell>
-                      <div class="flex gap-2">
-                        <.link
+                    <.table_default_cell class="text-right whitespace-nowrap">
+                      <.table_row_menu mode="auto" id={"data-menu-#{data_record.uuid}"}>
+                        <.table_row_menu_link
                           navigate={
                             PhoenixKit.Utils.Routes.path(
                               "/admin/entities/#{get_entity_slug(@entities, data_record.entity_uuid)}/data/#{data_record.uuid}"
                             )
                           }
-                          class="btn btn-outline btn-xs tooltip tooltip-bottom"
-                          data-tip={gettext("View")}
-                        >
-                          <.icon name="hero-eye" class="w-4 h-4 hidden sm:inline" />
-                          <span class="sm:hidden whitespace-nowrap">{gettext("View")}</span>
-                        </.link>
-                        <.link
+                          icon="hero-eye"
+                          label={gettext("View")}
+                        />
+                        <.table_row_menu_link
                           navigate={
                             PhoenixKit.Utils.Routes.path(
                               "/admin/entities/#{get_entity_slug(@entities, data_record.entity_uuid)}/data/#{data_record.uuid}/edit"
                             )
                           }
-                          class="btn btn-outline btn-xs tooltip tooltip-bottom"
-                          data-tip={gettext("Edit")}
-                        >
-                          <.icon name="hero-pencil" class="w-4 h-4 hidden sm:inline" />
-                          <span class="sm:hidden whitespace-nowrap">{gettext("Edit")}</span>
-                        </.link>
+                          icon="hero-pencil"
+                          label={gettext("Edit")}
+                        />
+                        <.table_row_menu_divider />
                         <%= cond do %>
                           <% data_record.status == "trashed" -> %>
-                            <button
-                              class="btn btn-outline btn-xs text-success tooltip tooltip-bottom"
+                            <.table_row_menu_button
                               phx-click="restore_from_trash"
                               phx-value-uuid={data_record.uuid}
                               phx-disable-with={gettext("…")}
-                              data-tip={gettext("Restore from trash")}
-                            >
-                              <.icon name="hero-arrow-uturn-left" class="w-4 h-4 hidden sm:inline" />
-                              <span class="sm:hidden whitespace-nowrap">{gettext("Restore")}</span>
-                            </button>
-                            <button
-                              class="btn btn-outline btn-xs text-error tooltip tooltip-bottom"
+                              icon="hero-arrow-uturn-left"
+                              label={gettext("Restore from trash")}
+                            />
+                            <.table_row_menu_button
                               phx-click="permanent_delete"
                               phx-value-uuid={data_record.uuid}
                               phx-disable-with={gettext("…")}
-                              data-tip={gettext("Delete forever")}
                               data-confirm={
                                 gettext(
                                   "Permanently delete this record? This cannot be undone, and will fail if it's still referenced by other tables."
                                 )
                               }
-                            >
-                              <.icon name="hero-x-circle" class="w-4 h-4 hidden sm:inline" />
-                              <span class="sm:hidden whitespace-nowrap">{gettext("Delete")}</span>
-                            </button>
+                              icon="hero-x-circle"
+                              label={gettext("Delete forever")}
+                            />
                           <% data_record.status == "archived" -> %>
-                            <button
-                              class="btn btn-outline btn-xs text-success tooltip tooltip-bottom"
+                            <.table_row_menu_button
                               phx-click="restore_data"
                               phx-value-uuid={data_record.uuid}
                               phx-disable-with={gettext("…")}
-                              data-tip={gettext("Restore")}
-                            >
-                              <.icon name="hero-arrow-path" class="w-4 h-4 hidden sm:inline" />
-                              <span class="sm:hidden whitespace-nowrap">{gettext("Restore")}</span>
-                            </button>
-                            <button
-                              class="btn btn-outline btn-xs text-error tooltip tooltip-bottom"
+                              icon="hero-arrow-path"
+                              label={gettext("Restore")}
+                            />
+                            <.table_row_menu_button
                               phx-click="trash_data"
                               phx-value-uuid={data_record.uuid}
                               phx-disable-with={gettext("…")}
-                              data-tip={gettext("Move to trash")}
-                            >
-                              <.icon name="hero-trash" class="w-4 h-4 hidden sm:inline" />
-                              <span class="sm:hidden whitespace-nowrap">{gettext("Trash")}</span>
-                            </button>
+                              icon="hero-trash"
+                              label={gettext("Move to trash")}
+                            />
                           <% true -> %>
-                            <button
-                              class="btn btn-outline btn-xs text-warning tooltip tooltip-bottom"
+                            <.table_row_menu_button
                               phx-click="archive_data"
                               phx-value-uuid={data_record.uuid}
                               phx-disable-with={gettext("…")}
-                              data-tip={gettext("Archive")}
-                            >
-                              <.icon name="hero-archive-box" class="w-4 h-4 hidden sm:inline" />
-                              <span class="sm:hidden whitespace-nowrap">{gettext("Archive")}</span>
-                            </button>
-                            <button
-                              class="btn btn-outline btn-xs text-error tooltip tooltip-bottom"
+                              icon="hero-archive-box"
+                              label={gettext("Archive")}
+                            />
+                            <.table_row_menu_button
                               phx-click="trash_data"
                               phx-value-uuid={data_record.uuid}
                               phx-disable-with={gettext("…")}
-                              data-tip={gettext("Move to trash")}
-                            >
-                              <.icon name="hero-trash" class="w-4 h-4 hidden sm:inline" />
-                              <span class="sm:hidden whitespace-nowrap">{gettext("Trash")}</span>
-                            </button>
+                              icon="hero-trash"
+                              label={gettext("Move to trash")}
+                            />
                         <% end %>
-                      </div>
+                      </.table_row_menu>
                     </.table_default_cell>
                   </.table_default_row>
                 <% end %>
@@ -1591,16 +1628,17 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
               item_id={&(&1.uuid)}
               on_reorder="reorder_records"
               draggable={not is_nil(@selected_entity) and length(@entity_data_records) > 1}
+              sortable_handle=".pk-drag-handle"
               layout={:list}
               gap="gap-6"
             >
               <:item :let={data_record}>
-                <div class="card bg-base-100 shadow-xl hover:shadow-2xl transition-shadow">
+                <div class="card bg-base-100 shadow-xl hover:shadow-2xl transition-shadow group/card">
                 <div class="card-body">
                   <div class="flex items-start gap-3 mb-4">
                     <div
                       :if={@selected_entity && length(@entity_data_records) > 1}
-                      class="cursor-grab active:cursor-grabbing text-base-content/30 hover:text-base-content/70 mt-1"
+                      class="pk-drag-handle cursor-grab active:cursor-grabbing text-base-content/0 group-hover/card:text-base-content/50 transition-colors mt-1"
                       title={gettext("Drag to reorder")}
                     >
                       <.icon name="hero-bars-3" class="w-5 h-5" />
@@ -1695,92 +1733,79 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
 
                   <%!-- Actions --%>
                   <div class="card-actions justify-end">
-                    <.link
-                      navigate={
-                        PhoenixKit.Utils.Routes.path(
-                          "/admin/entities/#{get_entity_slug(@entities, data_record.entity_uuid)}/data/#{data_record.uuid}"
-                        )
-                      }
-                      class="btn btn-outline btn-sm"
-                    >
-                      <.icon name="hero-eye" class="w-4 h-4 mr-1" /> {gettext("View")}
-                    </.link>
-                    <.link
-                      navigate={
-                        PhoenixKit.Utils.Routes.path(
-                          "/admin/entities/#{get_entity_slug(@entities, data_record.entity_uuid)}/data/#{data_record.uuid}/edit"
-                        )
-                      }
-                      class="btn btn-primary btn-sm"
-                    >
-                      <.icon name="hero-pencil" class="w-4 h-4 mr-1" /> {gettext("Edit")}
-                    </.link>
-
-                    <%!-- Archive / Trash / Restore / Permanent-delete buttons --%>
-                    <%= cond do %>
-                      <% data_record.status == "trashed" -> %>
-                        <button
-                          class="btn btn-success btn-sm"
-                          phx-click="restore_from_trash"
-                          phx-value-uuid={data_record.uuid}
-                          phx-disable-with={gettext("…")}
-                          title={gettext("Restore from trash")}
-                        >
-                          <.icon name="hero-arrow-uturn-left" class="w-4 h-4" />
-                        </button>
-                        <button
-                          class="btn btn-error btn-sm"
-                          phx-click="permanent_delete"
-                          phx-value-uuid={data_record.uuid}
-                          phx-disable-with={gettext("…")}
-                          title={gettext("Delete forever")}
-                          data-confirm={
-                            gettext(
-                              "Permanently delete this record? This cannot be undone, and will fail if it's still referenced by other tables."
-                            )
-                          }
-                        >
-                          <.icon name="hero-x-circle" class="w-4 h-4" />
-                        </button>
-                      <% data_record.status == "archived" -> %>
-                        <button
-                          class="btn btn-success btn-sm"
-                          phx-click="restore_data"
-                          phx-value-uuid={data_record.uuid}
-                          phx-disable-with={gettext("…")}
-                          title={gettext("Restore data record")}
-                        >
-                          <.icon name="hero-arrow-path" class="w-4 h-4" />
-                        </button>
-                        <button
-                          class="btn btn-error btn-sm"
-                          phx-click="trash_data"
-                          phx-value-uuid={data_record.uuid}
-                          phx-disable-with={gettext("…")}
-                          title={gettext("Move to trash")}
-                        >
-                          <.icon name="hero-trash" class="w-4 h-4" />
-                        </button>
-                      <% true -> %>
-                        <button
-                          class="btn btn-warning btn-sm"
-                          phx-click="archive_data"
-                          phx-value-uuid={data_record.uuid}
-                          phx-disable-with={gettext("…")}
-                          title={gettext("Archive data record")}
-                        >
-                          <.icon name="hero-archive-box" class="w-4 h-4" />
-                        </button>
-                        <button
-                          class="btn btn-error btn-sm"
-                          phx-click="trash_data"
-                          phx-value-uuid={data_record.uuid}
-                          phx-disable-with={gettext("…")}
-                          title={gettext("Move to trash")}
-                        >
-                          <.icon name="hero-trash" class="w-4 h-4" />
-                        </button>
-                    <% end %>
+                    <.table_row_menu mode="auto" id={"data-card-menu-#{data_record.uuid}"}>
+                      <.table_row_menu_link
+                        navigate={
+                          PhoenixKit.Utils.Routes.path(
+                            "/admin/entities/#{get_entity_slug(@entities, data_record.entity_uuid)}/data/#{data_record.uuid}"
+                          )
+                        }
+                        icon="hero-eye"
+                        label={gettext("View")}
+                      />
+                      <.table_row_menu_link
+                        navigate={
+                          PhoenixKit.Utils.Routes.path(
+                            "/admin/entities/#{get_entity_slug(@entities, data_record.entity_uuid)}/data/#{data_record.uuid}/edit"
+                          )
+                        }
+                        icon="hero-pencil"
+                        label={gettext("Edit")}
+                      />
+                      <.table_row_menu_divider />
+                      <%= cond do %>
+                        <% data_record.status == "trashed" -> %>
+                          <.table_row_menu_button
+                            phx-click="restore_from_trash"
+                            phx-value-uuid={data_record.uuid}
+                            phx-disable-with={gettext("…")}
+                            icon="hero-arrow-uturn-left"
+                            label={gettext("Restore from trash")}
+                          />
+                          <.table_row_menu_button
+                            phx-click="permanent_delete"
+                            phx-value-uuid={data_record.uuid}
+                            phx-disable-with={gettext("…")}
+                            data-confirm={
+                              gettext(
+                                "Permanently delete this record? This cannot be undone, and will fail if it's still referenced by other tables."
+                              )
+                            }
+                            icon="hero-x-circle"
+                            label={gettext("Delete forever")}
+                          />
+                        <% data_record.status == "archived" -> %>
+                          <.table_row_menu_button
+                            phx-click="restore_data"
+                            phx-value-uuid={data_record.uuid}
+                            phx-disable-with={gettext("…")}
+                            icon="hero-arrow-path"
+                            label={gettext("Restore")}
+                          />
+                          <.table_row_menu_button
+                            phx-click="trash_data"
+                            phx-value-uuid={data_record.uuid}
+                            phx-disable-with={gettext("…")}
+                            icon="hero-trash"
+                            label={gettext("Move to trash")}
+                          />
+                        <% true -> %>
+                          <.table_row_menu_button
+                            phx-click="archive_data"
+                            phx-value-uuid={data_record.uuid}
+                            phx-disable-with={gettext("…")}
+                            icon="hero-archive-box"
+                            label={gettext("Archive")}
+                          />
+                          <.table_row_menu_button
+                            phx-click="trash_data"
+                            phx-value-uuid={data_record.uuid}
+                            phx-disable-with={gettext("…")}
+                            icon="hero-trash"
+                            label={gettext("Move to trash")}
+                          />
+                      <% end %>
+                    </.table_row_menu>
                   </div>
                 </div>
               </div>
