@@ -52,11 +52,12 @@ defmodule PhoenixKitEntities.Web.EntitiesLiveTest do
       conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
       {:ok, view, _html} = live(conn, "/en/admin/entities")
 
-      # Two buttons match (table view + card view); target the table-view
-      # one via the `data-tip` attribute.
+      # Table view renders the action inside `<.table_row_menu>`; scope
+      # the selector to that menu's unique id (card view has its own
+      # inline button on the same uuid).
       view
       |> element(
-        "button[phx-click='archive_entity'][phx-value-uuid='#{ctx.published.uuid}'][data-tip='Archive']"
+        "#entity-menu-#{ctx.published.uuid} button[phx-click='archive_entity']"
       )
       |> render_click()
 
@@ -76,9 +77,18 @@ defmodule PhoenixKitEntities.Web.EntitiesLiveTest do
       {:ok, _view, html} = live(conn, "/en/admin/entities")
 
       # delta-pin: phx-disable-with attr present on every async/destructive
-      # phx-click button (C5). Regex-match because the attr is one of many.
-      assert html =~
-               ~r/phx-click="archive_entity"[^>]*phx-value-uuid="#{ctx.published.uuid}"[^>]*phx-disable-with=/
+      # phx-click button (C5). Action lives inside `<.table_row_menu>`;
+      # `:global` attrs aren't source-ordered so we scope to the menu's
+      # subtree by id and assert both signals appear inside it.
+      menu_id = "entity-menu-#{ctx.published.uuid}"
+
+      menu_html =
+        Regex.run(~r/<div id="#{menu_id}".*?<\/div>/s, html)
+        |> List.first()
+
+      assert is_binary(menu_html), "expected dropdown markup for #{menu_id}"
+      assert menu_html =~ ~s(phx-click="archive_entity")
+      assert menu_html =~ "phx-disable-with="
     end
   end
 
@@ -90,7 +100,7 @@ defmodule PhoenixKitEntities.Web.EntitiesLiveTest do
 
       view
       |> element(
-        "button[phx-click='restore_entity'][phx-value-uuid='#{ctx.archived.uuid}'][data-tip='Restore']"
+        "#entity-menu-#{ctx.archived.uuid} button[phx-click='restore_entity']"
       )
       |> render_click()
 

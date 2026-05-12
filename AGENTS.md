@@ -270,6 +270,14 @@ referencing the same `order_status` add together). Informational
 only, **NOT a delete-blocker** — soft-delete is safe regardless of
 the count.
 
+The `:reverse_references` key lives in the **global** OTP application
+env, so in an umbrella where two parent apps both define a callback
+for the same entity name (e.g. both register `"order_status"`), both
+callbacks fire on every `count_external_references/1` call and the
+totals add. For a single-tenant deploy this is irrelevant; multi-
+tenant hosts should pick distinct entity names per app or accept
+the cross-pollination.
+
 The 1-arity form preloads `:entity` per call. When rendering many
 records (admin trash bin, list views), prefer the 2-arity form
 `count_external_references(record, entity)` and load the entity

@@ -74,6 +74,7 @@ defmodule PhoenixKitEntities.EntityData do
   use Gettext, backend: PhoenixKitWeb.Gettext
   import Ecto.Changeset
   import Ecto.Query, warn: false
+  require Logger
 
   alias PhoenixKit.Modules.Languages.DialectMapper
   alias PhoenixKit.Users.Auth
@@ -94,6 +95,7 @@ defmodule PhoenixKitEntities.EntityData do
            only: [
              :uuid,
              :entity_uuid,
+             :parent_uuid,
              :title,
              :slug,
              :status,
@@ -117,6 +119,17 @@ defmodule PhoenixKitEntities.EntityData do
 
     belongs_to(:entity, Entities, foreign_key: :entity_uuid, references: :uuid, type: UUIDv7)
 
+    belongs_to(:parent, __MODULE__,
+      foreign_key: :parent_uuid,
+      references: :uuid,
+      type: UUIDv7
+    )
+
+    has_many(:children, __MODULE__,
+      foreign_key: :parent_uuid,
+      references: :uuid
+    )
+
     belongs_to(:creator, User,
       foreign_key: :created_by_uuid,
       references: :uuid,
@@ -134,10 +147,12 @@ defmodule PhoenixKitEntities.EntityData do
   Validates that entity exists, title is present, and data validates against entity definition.
   Automatically sets date_created on new records.
   """
+  @spec changeset(t() | Ecto.Changeset.t(), map()) :: Ecto.Changeset.t()
   def changeset(entity_data, attrs) do
     entity_data
     |> cast(attrs, [
       :entity_uuid,
+      :parent_uuid,
       :title,
       :slug,
       :status,
@@ -154,10 +169,109 @@ defmodule PhoenixKitEntities.EntityData do
     |> validate_length(:slug, max: 255)
     |> validate_inclusion(:status, @valid_statuses)
     |> validate_slug_format()
+    |> validate_not_self_parent()
+    |> validate_parent_same_entity()
+    |> validate_parent_not_descendant()
     |> sanitize_rich_text_data()
     |> validate_data_against_entity()
     |> foreign_key_constraint(:entity_uuid)
+    |> foreign_key_constraint(:parent_uuid)
     |> maybe_set_timestamps()
+  end
+
+  defp validate_not_self_parent(changeset) do
+    uuid = get_field(changeset, :uuid)
+    parent = get_field(changeset, :parent_uuid)
+
+    if not is_nil(uuid) and not is_nil(parent) and uuid == parent do
+      add_error(changeset, :parent_uuid, gettext("a record cannot be its own parent"))
+    else
+      changeset
+    end
+  end
+
+  # Same-entity enforcement happens here (the DB self-FK has no view of
+  # entity_uuid, so we look up the parent and compare). NULL parent_uuid
+  # is fine — that means "root".
+  defp validate_parent_same_entity(changeset) do
+    entity_uuid = get_field(changeset, :entity_uuid)
+    parent_uuid = get_field(changeset, :parent_uuid)
+
+    case {entity_uuid, parent_uuid} do
+      {nil, _} -> changeset
+      {_, nil} -> changeset
+      {ent, parent_id} -> check_parent_entity_match(changeset, ent, parent_id)
+    end
+  end
+
+  defp check_parent_entity_match(changeset, entity_uuid, parent_uuid) do
+    case repo().get(__MODULE__, parent_uuid) do
+      nil ->
+        add_error(changeset, :parent_uuid, gettext("parent record does not exist"))
+
+      %__MODULE__{entity_uuid: ^entity_uuid} ->
+        changeset
+
+      _other_entity ->
+        add_error(
+          changeset,
+          :parent_uuid,
+          gettext("parent must belong to the same entity")
+        )
+    end
+  rescue
+    # If the repo isn't started yet (compile-time, etc.) leave parent
+    # alone — the DB-level FK will catch a bogus id at insert time.
+    DBConnection.ConnectionError -> changeset
+    Postgrex.Error -> changeset
+  end
+
+  # Walk up from the proposed parent toward the root; if we ever hit
+  # the row we are editing, the parent assignment would create a cycle.
+  # Only meaningful when both uuids are present and distinct (the
+  # self-parent check covers the equal case).
+  defp validate_parent_not_descendant(changeset) do
+    uuid = get_field(changeset, :uuid)
+    parent_uuid = get_field(changeset, :parent_uuid)
+
+    case {uuid, parent_uuid} do
+      {nil, _} -> changeset
+      {_, nil} -> changeset
+      {same, same} -> changeset
+      {self_id, parent_id} -> check_no_cycle(changeset, self_id, parent_id)
+    end
+  end
+
+  defp check_no_cycle(changeset, self_id, parent_id) do
+    if ancestor_chain_contains?(parent_id, self_id, 0) do
+      add_error(
+        changeset,
+        :parent_uuid,
+        gettext("parent cannot be one of this record's descendants")
+      )
+    else
+      changeset
+    end
+  rescue
+    DBConnection.ConnectionError -> changeset
+    Postgrex.Error -> changeset
+  end
+
+  # Bounded walk — a tree this deep is a bug, but the guard keeps the
+  # validator from looping forever if the DB somehow already has a
+  # cycle (shouldn't happen, but be defensive).
+  @max_ancestor_depth 64
+
+  defp ancestor_chain_contains?(_uuid, _target, depth) when depth >= @max_ancestor_depth,
+    do: false
+
+  defp ancestor_chain_contains?(uuid, target, depth) do
+    case repo().get(__MODULE__, uuid) do
+      nil -> false
+      %__MODULE__{parent_uuid: nil} -> false
+      %__MODULE__{parent_uuid: ^target} -> true
+      %__MODULE__{parent_uuid: next} -> ancestor_chain_contains?(next, target, depth + 1)
+    end
   end
 
   defp validate_entity_reference(changeset) do
@@ -584,6 +698,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> PhoenixKitEntities.EntityData.list_all()
       [%PhoenixKitEntities.EntityData{}, ...]
   """
+  @spec list_all(keyword()) :: [t()]
   def list_all(opts \\ []) do
     from(d in __MODULE__,
       order_by: [desc: d.date_created],
@@ -605,6 +720,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> PhoenixKitEntities.EntityData.list_by_entity(entity_uuid)
       [%PhoenixKitEntities.EntityData{}, ...]
   """
+  @spec list_by_entity(binary(), keyword()) :: [t()]
   def list_by_entity(entity_uuid, opts \\ []) when is_binary(entity_uuid) do
     order = resolve_sort_order(entity_uuid, opts)
 
@@ -616,6 +732,90 @@ defmodule PhoenixKitEntities.EntityData do
     |> exclude_trashed(opts)
     |> repo().all()
     |> maybe_resolve_langs(opts)
+  end
+
+  @doc """
+  Returns the entity's records as a depth-ordered flat list for
+  WordPress-style indented rendering — parents precede their children,
+  siblings preserve the entity's current sort order.
+
+  Each element is `%{record: %EntityData{}, depth: integer}` where
+  depth `0` is a root row.
+
+  ## Options
+
+  * `:include_trashed` — when `true`, include trashed rows (default `false`)
+  * `:lang` — resolve multilingual fields to the given locale
+  * any other opt accepted by `list_by_entity/2`
+  """
+  @spec list_tree(binary(), keyword()) :: [%{record: t(), depth: non_neg_integer()}]
+  def list_tree(entity_uuid, opts \\ []) when is_binary(entity_uuid) do
+    rows = list_by_entity(entity_uuid, opts)
+    build_tree(rows)
+  end
+
+  @doc """
+  Returns all descendant UUIDs of a record (children, grandchildren, …).
+
+  Used by the parent picker to exclude rows that would create a cycle.
+  Walks the in-memory tree of the same entity rather than recursing
+  through the DB. Trashed rows are excluded by default — they cannot
+  meaningfully participate in a new cycle and including them would
+  leak trashed rows into the picker's exclusion set.
+
+  Returns `[]` for unknown / NULL `uuid`.
+
+  ## Options
+
+  * `:include_trashed` — when `true`, include trashed descendants
+  """
+  @spec descendant_uuids(binary() | nil, binary(), keyword()) :: [binary()]
+  def descendant_uuids(uuid, entity_uuid, opts \\ [])
+
+  def descendant_uuids(nil, _entity_uuid, _opts), do: []
+
+  def descendant_uuids(uuid, entity_uuid, opts)
+      when is_binary(uuid) and is_binary(entity_uuid) do
+    rows = list_by_entity(entity_uuid, opts)
+    children_by_parent = group_by_parent(rows)
+    collect_descendants(uuid, children_by_parent, [])
+  end
+
+  # Build a depth-ordered flat list from a sibling-ordered row list.
+  # Rows whose parent_uuid points outside the input set surface as
+  # roots (defensive — a misaligned parent reference can't hide rows
+  # from the admin view).
+  defp build_tree(rows) do
+    by_parent = group_by_parent(rows)
+    known_uuids = MapSet.new(rows, & &1.uuid)
+
+    roots =
+      Enum.filter(rows, fn row ->
+        is_nil(row.parent_uuid) or not MapSet.member?(known_uuids, row.parent_uuid)
+      end)
+
+    Enum.flat_map(roots, &walk_tree(&1, by_parent, 0))
+  end
+
+  defp walk_tree(row, by_parent, depth) do
+    children = Map.get(by_parent, row.uuid, [])
+    [%{record: row, depth: depth} | Enum.flat_map(children, &walk_tree(&1, by_parent, depth + 1))]
+  end
+
+  defp group_by_parent(rows) do
+    Enum.group_by(rows, & &1.parent_uuid)
+  end
+
+  defp collect_descendants(uuid, children_by_parent, acc) do
+    case Map.get(children_by_parent, uuid, []) do
+      [] ->
+        acc
+
+      children ->
+        Enum.reduce(children, acc, fn child, inner_acc ->
+          collect_descendants(child.uuid, children_by_parent, [child.uuid | inner_acc])
+        end)
+    end
   end
 
   @doc """
@@ -658,6 +858,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> PhoenixKitEntities.EntityData.list_by_entity_and_status(entity_uuid, "published")
       [%PhoenixKitEntities.EntityData{status: "published"}, ...]
   """
+  @spec list_by_entity_and_status(binary(), String.t(), keyword()) :: [t()]
   def list_by_entity_and_status(entity_uuid, status, opts \\ [])
       when is_binary(entity_uuid) and status in @valid_statuses do
     order = resolve_sort_order(entity_uuid, opts)
@@ -684,6 +885,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> PhoenixKitEntities.EntityData.get("invalid")
       nil
   """
+  @spec get(any(), keyword()) :: t() | nil
   def get(uuid, opts \\ [])
 
   def get(uuid, opts) when is_binary(uuid) do
@@ -712,6 +914,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> PhoenixKitEntities.EntityData.get!("nonexistent-uuid")
       ** (Ecto.NoResultsError)
   """
+  @spec get!(binary(), keyword()) :: t()
   def get!(id, opts \\ []) do
     case get(id, opts) do
       nil -> raise Ecto.NoResultsError, queryable: __MODULE__
@@ -732,6 +935,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> PhoenixKitEntities.EntityData.get_by_slug(entity_uuid, "invalid")
       nil
   """
+  @spec get_by_slug(binary(), String.t(), keyword()) :: t() | nil
   def get_by_slug(entity_uuid, slug, opts \\ [])
       when is_binary(entity_uuid) and is_binary(slug) do
     case repo().get_by(__MODULE__, entity_uuid: entity_uuid, slug: slug) do
@@ -746,6 +950,7 @@ defmodule PhoenixKitEntities.EntityData do
   Queries the JSONB `data` column for `data->lang_code->>'_slug'` matches.
   Used for uniqueness checks on translated slugs.
   """
+  @spec secondary_slug_exists?(binary(), String.t(), String.t(), binary() | nil) :: boolean()
   def secondary_slug_exists?(entity_uuid, lang_code, slug, exclude_record_uuid)
       when is_binary(entity_uuid) do
     query =
@@ -838,6 +1043,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> next_position(entity_uuid)
       6
   """
+  @spec next_position(binary()) :: non_neg_integer()
   def next_position(entity_uuid) when is_binary(entity_uuid) do
     # FOR UPDATE locks matching rows within a transaction to prevent
     # concurrent creates from reading the same max position.
@@ -864,6 +1070,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> update_position(record, 3)
       {:ok, %EntityData{position: 3}}
   """
+  @spec update_position(t(), integer()) :: {:ok, t()} | {:error, Ecto.Changeset.t()}
   def update_position(%__MODULE__{} = entity_data, position) when is_integer(position) do
     __MODULE__.update(entity_data, %{position: position})
   end
@@ -898,6 +1105,8 @@ defmodule PhoenixKitEntities.EntityData do
       iex> bulk_update_positions([{"uuid1", 1}, {"uuid2", 2}, {"uuid3", 3}], entity_uuid: e_uuid)
       :ok
   """
+  @spec bulk_update_positions([{binary(), integer()}], keyword()) ::
+          :ok | {:error, :too_many_uuids | term()}
   def bulk_update_positions(uuid_position_pairs, opts \\ [])
 
   def bulk_update_positions(uuid_position_pairs, opts)
@@ -957,6 +1166,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> move_to_position(record, 3)
       :ok
   """
+  @spec move_to_position(t(), integer()) :: :ok | {:error, term()}
   def move_to_position(%__MODULE__{} = record, new_position) when is_integer(new_position) do
     entity_uuid = record.entity_uuid
 
@@ -1037,6 +1247,8 @@ defmodule PhoenixKitEntities.EntityData do
       iex> reorder(entity_uuid, ["uuid3", "uuid1", "uuid2"])
       :ok
   """
+  @spec reorder(binary(), [binary()], keyword()) ::
+          :ok | {:error, :too_many_uuids | term()}
   def reorder(entity_uuid, ordered_uuids, opts \\ [])
       when is_binary(entity_uuid) and is_list(ordered_uuids) do
     pairs =
@@ -1087,10 +1299,41 @@ defmodule PhoenixKitEntities.EntityData do
       {:error, :referenced_by_external}
   """
   @spec delete(t(), keyword()) ::
-          {:ok, t()} | {:error, Ecto.Changeset.t() | :referenced_by_external}
+          {:ok, t()}
+          | {:error, Ecto.Changeset.t() | :referenced_by_external | :has_children}
   def delete(%__MODULE__{} = entity_data, opts \\ []) do
-    repo().delete(entity_data)
-    |> notify_data_event(:deleted, opts)
+    # Fold the child check INSIDE the transaction so a concurrent
+    # insert can't slip a live child between the check and the delete
+    # (which would otherwise trip the DB-level FK and surface as
+    # `:referenced_by_external` instead of the more accurate
+    # `:has_children`).
+    txn =
+      repo().transaction(fn ->
+        if has_live_children?(entity_data.uuid) do
+          repo().rollback(:has_children)
+        end
+
+        # Null any trashed children's parent_uuid first so the DB-level
+        # self-FK doesn't block the parent's delete.
+        nullify_trashed_children([entity_data.uuid])
+
+        case repo().delete(entity_data) do
+          {:ok, deleted} -> deleted
+          {:error, changeset} -> repo().rollback(changeset)
+        end
+      end)
+
+    case txn do
+      {:ok, deleted} ->
+        notify_data_event({:ok, deleted}, :deleted, opts)
+
+      {:error, :has_children} ->
+        log_data_error_activity(:deleted, opts)
+        {:error, :has_children}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:error, changeset}
+    end
   rescue
     # Ecto wraps Postgrex FK violations on Repo.delete in
     # `Ecto.ConstraintError` because `delete/1` doesn't go through a
@@ -1110,6 +1353,27 @@ defmodule PhoenixKitEntities.EntityData do
       else
         reraise e, __STACKTRACE__
       end
+  end
+
+  defp nullify_trashed_children(parent_uuids) when is_list(parent_uuids) do
+    from(d in __MODULE__,
+      where: d.parent_uuid in ^parent_uuids and d.status == ^@soft_delete_status
+    )
+    |> repo().update_all(set: [parent_uuid: nil])
+  end
+
+  # "Live" children = non-trashed rows whose parent_uuid points at this
+  # record. Trashed children don't block hard-delete: their row stays
+  # alive in the DB only to keep parent-app FKs resolving — for
+  # entity-internal tree integrity they're invisible.
+  defp has_live_children?(uuid) when is_binary(uuid) do
+    from(d in __MODULE__,
+      where: d.parent_uuid == ^uuid and d.status != ^@soft_delete_status,
+      select: 1,
+      limit: 1
+    )
+    |> repo().one()
+    |> Kernel.!=(nil)
   end
 
   @doc """
@@ -1132,8 +1396,15 @@ defmodule PhoenixKitEntities.EntityData do
   def trash(%__MODULE__{status: @soft_delete_status}, _opts), do: {:error, :already_trashed}
 
   def trash(%__MODULE__{} = entity_data, opts) when is_list(opts) do
+    # Stash the row's current status in metadata so restore can return
+    # to it. Without this, restore unconditionally lands on "published"
+    # and a trashed draft silently goes live on restore.
+    metadata =
+      (entity_data.metadata || %{})
+      |> Map.put("trashed_from_status", entity_data.status)
+
     entity_data
-    |> changeset(%{status: @soft_delete_status})
+    |> status_only_changeset(@soft_delete_status, metadata)
     |> repo().update()
     |> notify_data_event(:trashed, opts)
   end
@@ -1141,30 +1412,57 @@ defmodule PhoenixKitEntities.EntityData do
   def trash(%__MODULE__{} = entity_data), do: trash(entity_data, [])
 
   @doc """
-  Restores a trashed entity data record by setting its status back to
-  `"published"`.
+  Restores a trashed entity data record. The status it returns to is
+  the one stashed in `metadata["trashed_from_status"]` when the row was
+  trashed — defaulting to `"draft"` if no stash is present (e.g. for
+  rows trashed via `bulk_trash/2`, or rows trashed before this stash
+  shipped).
 
   Returns `{:error, :not_trashed}` if the record isn't currently trashed —
-  this is a guardrail against re-publishing arbitrary records via the
-  trash-restore path. Use `update/2` for general status changes.
+  guardrail against re-publishing arbitrary records via the trash-restore
+  path. Use `update/2` for general status changes.
 
   ## Examples
 
       iex> EntityData.restore_from_trash(trashed_record, actor_uuid: admin.uuid)
-      {:ok, %EntityData{status: "published"}}
+      {:ok, %EntityData{status: "published"}}  # was published before trashing
   """
   @spec restore_from_trash(t(), keyword()) ::
           {:ok, t()} | {:error, :not_trashed | Ecto.Changeset.t()}
   def restore_from_trash(entity_data, opts \\ [])
 
   def restore_from_trash(%__MODULE__{status: @soft_delete_status} = entity_data, opts) do
+    prior_status =
+      case entity_data.metadata do
+        %{"trashed_from_status" => s} when s in @valid_statuses and s != @soft_delete_status -> s
+        _ -> "draft"
+      end
+
+    metadata = (entity_data.metadata || %{}) |> Map.delete("trashed_from_status")
+
     entity_data
-    |> changeset(%{status: "published"})
+    |> status_only_changeset(prior_status, metadata)
     |> repo().update()
     |> notify_data_event(:restored, opts)
   end
 
   def restore_from_trash(%__MODULE__{}, _opts), do: {:error, :not_trashed}
+
+  # Focused changeset for trash / restore — only touches `:status`,
+  # `:metadata`, and `:date_updated`. Skips the full per-field validation
+  # against the entity blueprint because a record whose `:data` is no
+  # longer valid (e.g. the entity gained a required field after the row
+  # was created) must still be retirable via trash. The bulk paths
+  # bypass changesets entirely; this keeps single-record + bulk in sync.
+  defp status_only_changeset(entity_data, status, metadata) do
+    entity_data
+    |> cast(%{status: status, metadata: metadata, date_updated: UtilsDate.utc_now()}, [
+      :status,
+      :metadata,
+      :date_updated
+    ])
+    |> validate_inclusion(:status, @valid_statuses)
+  end
 
   # Match Postgres FK / NOT NULL violations raised when a parent-app row
   # still references this record. SQLSTATE codes are stable: `23503` =
@@ -1188,6 +1486,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> PhoenixKitEntities.EntityData.change(record)
       %Ecto.Changeset{data: %PhoenixKitEntities.EntityData{}}
   """
+  @spec change(t(), map()) :: Ecto.Changeset.t()
   def change(%__MODULE__{} = entity_data, attrs \\ %{}) do
     changeset(entity_data, attrs)
   end
@@ -1206,6 +1505,8 @@ defmodule PhoenixKitEntities.EntityData do
       iex> PhoenixKitEntities.EntityData.search_by_title("Acme", entity_uuid, lang: "es")
       [%PhoenixKitEntities.EntityData{}, ...]
   """
+  @spec search_by_title(String.t()) :: [t()]
+  @spec search_by_title(String.t(), binary() | nil, keyword()) :: [t()]
   def search_by_title(search_term) when is_binary(search_term),
     do: search_by_title(search_term, nil, [])
 
@@ -1246,6 +1547,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> PhoenixKitEntities.EntityData.published_records(entity_uuid)
       [%PhoenixKitEntities.EntityData{status: "published"}, ...]
   """
+  @spec published_records(binary(), keyword()) :: [t()]
   def published_records(entity_uuid, opts \\ []) when is_binary(entity_uuid) do
     list_by_entity_and_status(entity_uuid, "published", opts)
   end
@@ -1264,6 +1566,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> PhoenixKitEntities.EntityData.count_by_entity(entity_uuid, include_trashed: true)
       45
   """
+  @spec count_by_entity(binary(), keyword()) :: non_neg_integer()
   def count_by_entity(entity_uuid, opts \\ []) when is_binary(entity_uuid) do
     from(d in __MODULE__, where: d.entity_uuid == ^entity_uuid, select: count(d.uuid))
     |> exclude_trashed(opts)
@@ -1294,6 +1597,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> PhoenixKitEntities.EntityData.filter_by_status("draft")
       [%PhoenixKitEntities.EntityData{status: "draft"}, ...]
   """
+  @spec filter_by_status(String.t(), keyword()) :: [t()]
   def filter_by_status(status, opts \\ []) when status in @valid_statuses do
     from(d in __MODULE__,
       where: d.status == ^status,
@@ -1494,21 +1798,26 @@ defmodule PhoenixKitEntities.EntityData do
   @doc """
   Alias for list_all/1 for consistency with LiveView naming.
   """
+  @spec list_all_data(keyword()) :: [t()]
   def list_all_data(opts \\ []), do: list_all(opts)
 
   @doc """
   Alias for list_by_entity/2 for consistency with LiveView naming.
   """
+  @spec list_data_by_entity(binary(), keyword()) :: [t()]
   def list_data_by_entity(entity_uuid, opts \\ []), do: list_by_entity(entity_uuid, opts)
 
   @doc """
   Alias for filter_by_status/2 for consistency with LiveView naming.
   """
+  @spec list_data_by_status(String.t(), keyword()) :: [t()]
   def list_data_by_status(status, opts \\ []), do: filter_by_status(status, opts)
 
   @doc """
   Alias for search_by_title for consistency with LiveView naming.
   """
+  @spec search_data(String.t()) :: [t()]
+  @spec search_data(String.t(), binary() | nil, keyword()) :: [t()]
   def search_data(search_term) when is_binary(search_term),
     do: search_by_title(search_term, nil, [])
 
@@ -1518,6 +1827,7 @@ defmodule PhoenixKitEntities.EntityData do
   @doc """
   Alias for get!/2 for consistency with LiveView naming.
   """
+  @spec get_data!(binary(), keyword()) :: t()
   def get_data!(id, opts \\ []), do: get!(id, opts)
 
   @doc """
@@ -1544,8 +1854,8 @@ defmodule PhoenixKitEntities.EntityData do
 
   ## Performance — pass `entity` when the caller already has it
 
-  The single-arg form preloads `:entity` on every call. When rendering
-  many records (e.g. the admin trash bin), pass the already-loaded
+  The single-arg form preloads `:entity` on every call. Parent-app
+  callers rendering many records in a loop can pass the already-loaded
   entity as the second arg to skip the per-call N+1:
 
       entity = Entities.get_entity!(entity_uuid)
@@ -1603,7 +1913,17 @@ defmodule PhoenixKitEntities.EntityData do
         count = fun.(entity_data.uuid)
         if is_integer(count) and count >= 0, do: acc + count, else: acc
       rescue
-        _ -> acc
+        # Narrow to the DB-availability shapes — bugs in the parent-app
+        # callback (KeyError, FunctionClauseError, etc.) should surface
+        # in logs instead of silently zeroing the count. A broken
+        # callback that reports "Used by 0 rows" is the surprising
+        # default this guard was supposed to prevent.
+        e in [DBConnection.ConnectionError, Postgrex.Error] ->
+          Logger.warning(
+            "[Entities] reverse_references callback failed: #{Exception.message(e)}"
+          )
+
+          acc
       end
     end)
   end
@@ -1684,33 +2004,78 @@ defmodule PhoenixKitEntities.EntityData do
       {:error, :referenced_by_external}
   """
   @spec bulk_delete([String.t()], keyword()) ::
-          {non_neg_integer(), nil} | {:error, :referenced_by_external}
+          {non_neg_integer(), nil}
+          | {:error, :referenced_by_external | :has_children}
   def bulk_delete(uuids, opts \\ []) when is_list(uuids) do
-    {count, _} =
-      result =
+    # Wrap the activity-log call OUTSIDE the transaction so a logging
+    # failure can't be misclassified as `:referenced_by_external`.
+    case run_bulk_delete_txn(uuids) do
+      {:ok, {count, _} = result} ->
+        PhoenixKitEntities.ActivityLog.log(%{
+          action: "entity_data.bulk_deleted",
+          mode: "manual",
+          actor_uuid: Keyword.get(opts, :actor_uuid),
+          resource_type: "entity_data",
+          metadata: %{
+            "count" => count,
+            "uuid_count" => length(uuids)
+          }
+        })
+
+        result
+
+      {:error, :has_children} ->
+        log_data_error_activity(:bulk_deleted, opts)
+        {:error, :has_children}
+
+      {:error, _} ->
+        log_data_error_activity(:bulk_deleted, opts)
+        {:error, :referenced_by_external}
+    end
+  end
+
+  defp run_bulk_delete_txn(uuids) do
+    repo().transaction(fn ->
+      # Fold the check inside the transaction so a concurrent insert
+      # can't land a live external child between the check and the
+      # delete.
+      if has_external_live_children?(uuids) do
+        repo().rollback(:has_children)
+      end
+
+      # Null trashed children of any row in the input set before
+      # deleting, so the self-FK doesn't block.
+      nullify_trashed_children(uuids)
+
       from(d in __MODULE__, where: d.uuid in ^uuids)
       |> repo().delete_all()
-
-    PhoenixKitEntities.ActivityLog.log(%{
-      action: "entity_data.bulk_deleted",
-      mode: "manual",
-      actor_uuid: Keyword.get(opts, :actor_uuid),
-      resource_type: "entity_data",
-      metadata: %{
-        "count" => count,
-        "uuid_count" => length(uuids)
-      }
-    })
-
-    result
+    end)
   rescue
     e in Postgrex.Error ->
       if foreign_key_or_not_null_violation?(e) do
-        log_data_error_activity(:bulk_deleted, opts)
         {:error, :referenced_by_external}
       else
         reraise e, __STACKTRACE__
       end
+  end
+
+  # A child is "external" to the bulk_delete set if its parent is being
+  # deleted but the child itself is not. Children that are also in the
+  # input list are fine — they get deleted alongside their parent.
+  # Trashed children don't block (same rule as the single-record path).
+  defp has_external_live_children?([]), do: false
+
+  defp has_external_live_children?(uuids) when is_list(uuids) do
+    from(d in __MODULE__,
+      where:
+        d.parent_uuid in ^uuids and
+          d.status != ^@soft_delete_status and
+          d.uuid not in ^uuids,
+      select: 1,
+      limit: 1
+    )
+    |> repo().one()
+    |> Kernel.!=(nil)
   end
 
   @doc """
@@ -1813,6 +2178,13 @@ defmodule PhoenixKitEntities.EntityData do
         trashed_records: 3
       }
   """
+  @spec get_data_stats(binary() | nil) :: %{
+          total_records: non_neg_integer(),
+          published_records: non_neg_integer(),
+          draft_records: non_neg_integer(),
+          archived_records: non_neg_integer(),
+          trashed_records: non_neg_integer()
+        }
   def get_data_stats(entity_uuid \\ nil) do
     query =
       from(d in __MODULE__,
@@ -1863,6 +2235,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> get_translation(flat_record, "en-US")
       %{"name" => "Acme", "category" => "Tech"}
   """
+  @spec get_translation(t(), String.t()) :: map()
   def get_translation(%__MODULE__{data: data}, lang_code) when is_binary(lang_code) do
     Multilang.get_language_data(data, lang_code)
   end
@@ -1878,6 +2251,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> get_raw_translation(record, "es-ES")
       %{"name" => "Acme España"}
   """
+  @spec get_raw_translation(t(), String.t()) :: map()
   def get_raw_translation(%__MODULE__{data: data}, lang_code) when is_binary(lang_code) do
     Multilang.get_raw_language_data(data, lang_code)
   end
@@ -1896,6 +2270,7 @@ defmodule PhoenixKitEntities.EntityData do
         "es-ES" => %{"name" => "Acme España", "category" => "Tech"}
       }
   """
+  @spec get_all_translations(t()) :: %{optional(String.t()) => map()}
   def get_all_translations(%__MODULE__{data: data}) do
     if Multilang.multilang_data?(data) do
       Multilang.enabled_languages()
@@ -1921,6 +2296,8 @@ defmodule PhoenixKitEntities.EntityData do
       iex> set_translation(record, "en-US", %{"name" => "Acme Corp", "category" => "Tech"})
       {:ok, %EntityData{}}
   """
+  @spec set_translation(t(), String.t(), map()) ::
+          {:ok, t()} | {:error, Ecto.Changeset.t()}
   def set_translation(%__MODULE__{} = entity_data, lang_code, field_data)
       when is_binary(lang_code) and is_map(field_data) do
     updated_data = Multilang.put_language_data(entity_data.data, lang_code, field_data)
@@ -1941,6 +2318,9 @@ defmodule PhoenixKitEntities.EntityData do
       iex> remove_translation(record, "en-US")
       {:error, :cannot_remove_primary}
   """
+  @spec remove_translation(t(), String.t()) ::
+          {:ok, t()}
+          | {:error, :cannot_remove_primary | :not_multilang | Ecto.Changeset.t()}
   def remove_translation(%__MODULE__{data: data} = entity_data, lang_code)
       when is_binary(lang_code) do
     if Multilang.multilang_data?(data) do
@@ -1972,6 +2352,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> get_title_translation(record, "es-ES")
       "Mi Producto"
   """
+  @spec get_title_translation(t(), String.t()) :: String.t() | nil
   def get_title_translation(%__MODULE__{} = entity_data, lang_code)
       when is_binary(lang_code) do
     case Multilang.get_language_data(entity_data.data, lang_code) do
@@ -2001,6 +2382,8 @@ defmodule PhoenixKitEntities.EntityData do
       iex> set_title_translation(record, "en-US", "My Product")
       {:ok, %EntityData{}}
   """
+  @spec set_title_translation(t(), String.t(), String.t()) ::
+          {:ok, t()} | {:error, Ecto.Changeset.t()}
   def set_title_translation(%__MODULE__{} = entity_data, lang_code, title)
       when is_binary(lang_code) and is_binary(title) do
     # Merge _title into existing raw overrides to preserve other fields
@@ -2026,6 +2409,7 @@ defmodule PhoenixKitEntities.EntityData do
       iex> get_all_title_translations(record)
       %{"en-US" => "My Product", "es-ES" => "Mi Producto", "fr-FR" => "Mon Produit"}
   """
+  @spec get_all_title_translations(t()) :: %{optional(String.t()) => String.t() | nil}
   def get_all_title_translations(%__MODULE__{} = entity_data) do
     Multilang.enabled_languages()
     |> Map.new(fn lang ->

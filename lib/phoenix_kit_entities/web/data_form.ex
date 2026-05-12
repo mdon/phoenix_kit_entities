@@ -23,7 +23,12 @@ defmodule PhoenixKitEntities.Web.DataForm do
   alias PhoenixKitEntities.PresenceHelpers
 
   # Fields that should keep their primary-language DB column value on secondary tabs.
-  @preserve_fields %{"title" => :title, "slug" => :slug, "status" => :status}
+  @preserve_fields %{
+    "title" => :title,
+    "slug" => :slug,
+    "status" => :status,
+    "parent_uuid" => :parent_uuid
+  }
 
   @impl true
   def mount(_params, _session, socket) do
@@ -130,9 +135,38 @@ defmodule PhoenixKitEntities.Web.DataForm do
       |> assign(:form_record_topic_key, normalize_record_key(form_record_key))
       |> assign(:live_source, live_source)
       |> assign(:has_unsaved_changes, false)
+      |> assign_parent_options(entity, data_record, locale)
       |> mount_multilang()
 
     hydrate_data_presence(socket, entity, data_record, form_record_key, current_user)
+  end
+
+  # Build the parent-picker options for the current record. Excludes the
+  # row itself and any of its descendants (selecting either would create
+  # a cycle). Trashed rows are excluded — they can't meaningfully be a
+  # parent in the active tree.
+  defp assign_parent_options(socket, entity, data_record, locale) do
+    tree = EntityData.list_tree(entity.uuid, lang: locale)
+
+    excluded_uuids =
+      case data_record.uuid do
+        nil ->
+          MapSet.new()
+
+        uuid ->
+          [uuid | EntityData.descendant_uuids(uuid, entity.uuid)]
+          |> MapSet.new()
+      end
+
+    options =
+      tree
+      |> Enum.reject(&MapSet.member?(excluded_uuids, &1.record.uuid))
+      |> Enum.map(fn %{record: r, depth: d} ->
+        prefix = String.duplicate("— ", d)
+        {prefix <> (r.title || ""), r.uuid}
+      end)
+
+    assign(socket, :parent_options, options)
   end
 
   defp hydrate_data_presence(socket, entity, data_record, form_record_key, current_user) do
@@ -313,6 +347,25 @@ defmodule PhoenixKitEntities.Web.DataForm do
       %{uuid: uuid} -> uuid
       _ -> nil
     end
+  end
+
+  # The parent picker is rendered as a raw <select>, so any changeset
+  # error on :parent_uuid doesn't surface through <.input>'s built-in
+  # error block. Pull the first error message manually for the template.
+  defp parent_uuid_error(%Ecto.Changeset{action: action, errors: errors})
+       when action in [:validate, :insert, :update] do
+    case Keyword.get(errors, :parent_uuid) do
+      {msg, opts} -> translate_validator_error({msg, opts})
+      _ -> nil
+    end
+  end
+
+  defp parent_uuid_error(_), do: nil
+
+  defp translate_validator_error({msg, opts}) do
+    Enum.reduce(opts, msg, fn {k, v}, acc ->
+      String.replace(acc, "%{#{k}}", to_string(v))
+    end)
   end
 
   # ── Validate/Save helpers (below all handle_event clauses to avoid grouping warnings) ──
@@ -1321,7 +1374,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
                   {gettext("Record Settings")}
                 </h2>
 
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                   <%!-- Status --%>
                   <div>
                     <.label for="phoenix_kit_entity_data_status">{gettext("Status")}</.label>
@@ -1350,6 +1403,35 @@ defmodule PhoenixKitEntities.Web.DataForm do
                         </option>
                       </select>
                     </label>
+                  </div>
+
+                  <%!-- Parent (optional, same-entity) --%>
+                  <div>
+                    <.label for="phoenix_kit_entity_data_parent_uuid">{gettext("Parent")}</.label>
+                    <label class="select w-full">
+                      <select
+                        id="phoenix_kit_entity_data_parent_uuid"
+                        name="phoenix_kit_entity_data[parent_uuid]"
+                        disabled={@readonly?}
+                      >
+                        <option value="" selected={
+                          is_nil(Ecto.Changeset.get_field(@changeset, :parent_uuid))
+                        }>
+                          {gettext("— None (top level) —")}
+                        </option>
+                        <%= for {label, value} <- @parent_options do %>
+                          <option
+                            value={value}
+                            selected={Ecto.Changeset.get_field(@changeset, :parent_uuid) == value}
+                          >
+                            {label}
+                          </option>
+                        <% end %>
+                      </select>
+                    </label>
+                    <%= if (msg = parent_uuid_error(@changeset)) do %>
+                      <p class="mt-1 text-sm text-error">{msg}</p>
+                    <% end %>
                   </div>
 
                   <%!-- Entity Type (Read-only) --%>
@@ -1457,6 +1539,35 @@ defmodule PhoenixKitEntities.Web.DataForm do
                         </option>
                       </select>
                     </label>
+                  </div>
+
+                  <%!-- Parent (optional, same-entity) --%>
+                  <div>
+                    <.label for="phoenix_kit_entity_data_parent_uuid">{gettext("Parent")}</.label>
+                    <label class="select w-full">
+                      <select
+                        id="phoenix_kit_entity_data_parent_uuid"
+                        name="phoenix_kit_entity_data[parent_uuid]"
+                        disabled={@readonly?}
+                      >
+                        <option value="" selected={
+                          is_nil(Ecto.Changeset.get_field(@changeset, :parent_uuid))
+                        }>
+                          {gettext("— None (top level) —")}
+                        </option>
+                        <%= for {label, value} <- @parent_options do %>
+                          <option
+                            value={value}
+                            selected={Ecto.Changeset.get_field(@changeset, :parent_uuid) == value}
+                          >
+                            {label}
+                          </option>
+                        <% end %>
+                      </select>
+                    </label>
+                    <%= if (msg = parent_uuid_error(@changeset)) do %>
+                      <p class="mt-1 text-sm text-error">{msg}</p>
+                    <% end %>
                   </div>
 
                   <%!-- Entity Type (Read-only) --%>

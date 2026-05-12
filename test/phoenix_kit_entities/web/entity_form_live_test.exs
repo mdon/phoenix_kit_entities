@@ -72,6 +72,48 @@ defmodule PhoenixKitEntities.Web.EntityFormLiveTest do
     end
   end
 
+  describe "save_and_return" do
+    test "Update and Return navigates back to /admin/entities", %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/entities/#{ctx.entity.uuid}/edit")
+
+      # The form has TWO submit buttons in each action row. The plain
+      # "Update Entity" button submits the form without `return_to_list`;
+      # the "Update and Return" button carries `name="return_to_list"
+      # value="true"`. Phoenix's `render_submit/2` second arg lets us
+      # inject the second-button params on top of the form fields.
+      view
+      |> form("form[phx-change='validate']", %{
+        "entities" => %{"display_name" => "Updated Display Name"}
+      })
+      |> render_submit(%{"return_to_list" => "true"})
+
+      # The LV pushes navigate to /admin/entities under the configured
+      # locale (or the referrer if one was captured at mount — none
+      # here so it falls back to the list path).
+      assert_redirected(view, "/phoenix_kit/en-US/admin/entities")
+    end
+
+    test "plain Update keeps you on the edit page", %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, "/en/admin/entities/#{ctx.entity.uuid}/edit")
+
+      # Submit without `return_to_list` — same form, plain button.
+      view
+      |> form("form[phx-change='validate']", %{
+        "entities" => %{"display_name" => "Stay Put"}
+      })
+      |> render_submit()
+
+      # No redirect — the view stays on the edit page (handle_save_success
+      # falls through to the "stay on edit" branch). Render-after-submit
+      # would crash if a push_navigate had fired.
+      assert render(view) =~ "Edit Entity"
+      # And the save actually persisted.
+      assert Entities.get_entity!(ctx.entity.uuid).display_name == "Stay Put"
+    end
+  end
+
   describe "switch_language event" do
     test "ignores unknown language and stays on the form", %{conn: conn} = ctx do
       conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))

@@ -156,6 +156,7 @@ defmodule PhoenixKitEntities do
   Validates that name is unique, fields_definition is valid, and all required fields are present.
   Automatically sets date_created on new records.
   """
+  @spec changeset(t() | Ecto.Changeset.t(), map()) :: Ecto.Changeset.t()
   def changeset(entity, attrs) do
     entity
     |> cast(attrs, [
@@ -395,6 +396,7 @@ defmodule PhoenixKitEntities do
       iex> PhoenixKitEntities.list_active_entities()
       [%PhoenixKit.Entities{status: "published"}, ...]
   """
+  @spec list_active_entities(keyword()) :: [t()]
   def list_active_entities(opts \\ []) do
     from(e in __MODULE__,
       where: e.status == "published",
@@ -832,6 +834,7 @@ defmodule PhoenixKitEntities do
       iex> PhoenixKitEntities.get_system_stats()
       %{total_entities: 5, active_entities: 4, total_data_records: 150}
   """
+  @spec get_system_stats() :: map()
   def get_system_stats do
     entities_query = from(e in __MODULE__)
     data_query = from(d in PhoenixKitEntities.EntityData)
@@ -886,6 +889,7 @@ defmodule PhoenixKitEntities do
       iex> PhoenixKitEntities.count_all_entity_data()
       243
   """
+  @spec count_all_entity_data() :: non_neg_integer()
   def count_all_entity_data do
     from(d in PhoenixKitEntities.EntityData, select: count(d.uuid))
     |> repo().one()
@@ -1017,6 +1021,7 @@ defmodule PhoenixKitEntities do
       iex> PhoenixKitEntities.get_max_per_user()
       100
   """
+  @spec get_max_per_user() :: non_neg_integer()
   def get_max_per_user do
     Settings.get_integer_setting("entities_max_per_user", 100)
   end
@@ -1069,6 +1074,7 @@ defmodule PhoenixKitEntities do
   def module_name, do: "Entities"
 
   @impl PhoenixKit.Module
+  @spec permission_metadata() :: map()
   def permission_metadata do
     %{
       key: "entities",
@@ -1079,6 +1085,7 @@ defmodule PhoenixKitEntities do
   end
 
   @impl PhoenixKit.Module
+  @spec admin_tabs() :: [PhoenixKit.Dashboard.Tab.t()]
   def admin_tabs do
     [
       Tab.new!(
@@ -1129,6 +1136,8 @@ defmodule PhoenixKitEntities do
   - `entities_children(scope)` — fallback that reads the locale from
     `Gettext.get_locale/1`. Older core releases dispatch this form.
   """
+  @spec entities_children(any(), String.t() | nil) :: [PhoenixKit.Dashboard.Tab.t()]
+  @spec entities_children(any()) :: [PhoenixKit.Dashboard.Tab.t()]
   def entities_children(_scope, locale) when is_binary(locale) or is_nil(locale) do
     cached_entity_summaries(locale || Gettext.get_locale(PhoenixKitWeb.Gettext))
     |> build_entity_tabs()
@@ -1205,6 +1214,7 @@ defmodule PhoenixKitEntities do
   end
 
   @impl PhoenixKit.Module
+  @spec settings_tabs() :: [PhoenixKit.Dashboard.Tab.t()]
   def settings_tabs do
     [
       Tab.new!(
@@ -1233,6 +1243,7 @@ defmodule PhoenixKitEntities do
   def version, do: "0.1.4"
 
   @impl PhoenixKit.Module
+  @spec route_module() :: module()
   def route_module, do: PhoenixKitEntities.Routes
 
   # ============================================================================
@@ -1251,6 +1262,7 @@ defmodule PhoenixKitEntities do
       iex> PhoenixKitEntities.get_sort_mode(entity)
       "auto"
   """
+  @spec get_sort_mode(t()) :: String.t()
   def get_sort_mode(%__MODULE__{settings: settings}) do
     (settings || %{}) |> Map.get("sort_mode", "auto")
   end
@@ -1266,6 +1278,7 @@ defmodule PhoenixKitEntities do
       iex> PhoenixKitEntities.get_sort_mode_by_uuid(entity_uuid)
       "manual"
   """
+  @spec get_sort_mode_by_uuid(binary()) :: String.t()
   def get_sort_mode_by_uuid(entity_uuid) when is_binary(entity_uuid) do
     case get_entity(entity_uuid) do
       nil -> "auto"
@@ -1281,6 +1294,7 @@ defmodule PhoenixKitEntities do
       iex> PhoenixKitEntities.manual_sort?(entity)
       true
   """
+  @spec manual_sort?(t()) :: boolean()
   def manual_sort?(%__MODULE__{} = entity), do: get_sort_mode(entity) == "manual"
 
   @doc """
@@ -1296,6 +1310,7 @@ defmodule PhoenixKitEntities do
       iex> PhoenixKitEntities.update_sort_mode(entity, "manual")
       {:ok, %PhoenixKitEntities{}}
   """
+  @spec update_sort_mode(t(), String.t()) :: {:ok, t()} | {:error, Ecto.Changeset.t()}
   def update_sort_mode(%__MODULE__{} = entity, mode) when mode in @valid_sort_modes do
     current_settings = entity.settings || %{}
     new_settings = Map.put(current_settings, "sort_mode", mode)
@@ -1317,6 +1332,7 @@ defmodule PhoenixKitEntities do
       iex> PhoenixKitEntities.get_mirror_settings(entity)
       %{mirror_definitions: true, mirror_data: false}
   """
+  @spec get_mirror_settings(t()) :: %{definitions: boolean(), data: boolean()}
   def get_mirror_settings(%__MODULE__{settings: settings}) do
     settings = settings || %{}
 
@@ -1334,6 +1350,7 @@ defmodule PhoenixKitEntities do
       iex> PhoenixKitEntities.mirror_definitions_enabled?(entity)
       true
   """
+  @spec mirror_definitions_enabled?(t()) :: boolean()
   def mirror_definitions_enabled?(%__MODULE__{settings: settings}) do
     settings = settings || %{}
     Map.get(settings, "mirror_definitions", false) == true
@@ -1347,6 +1364,7 @@ defmodule PhoenixKitEntities do
       iex> PhoenixKitEntities.mirror_data_enabled?(entity)
       false
   """
+  @spec mirror_data_enabled?(t()) :: boolean()
   def mirror_data_enabled?(%__MODULE__{settings: settings}) do
     settings = settings || %{}
     Map.get(settings, "mirror_data", false) == true
@@ -1364,6 +1382,7 @@ defmodule PhoenixKitEntities do
       iex> PhoenixKitEntities.update_mirror_settings(entity, %{"mirror_definitions" => true})
       {:ok, %PhoenixKit.Entities{}}
   """
+  @spec update_mirror_settings(t(), map()) :: {:ok, t()} | {:error, Ecto.Changeset.t()}
   def update_mirror_settings(%__MODULE__{} = entity, mirror_settings)
       when is_map(mirror_settings) do
     current_settings = entity.settings || %{}
@@ -1382,6 +1401,7 @@ defmodule PhoenixKitEntities do
       iex> PhoenixKitEntities.list_entities_with_mirror_status()
       [%{id: 1, name: "test", display_name: "Test", data_count: 8, mirror_definitions: true, mirror_data: false}, ...]
   """
+  @spec list_entities_with_mirror_status() :: [map()]
   def list_entities_with_mirror_status do
     entities = list_entities()
 
@@ -1410,6 +1430,7 @@ defmodule PhoenixKitEntities do
       iex> PhoenixKitEntities.enable_all_definitions_mirror()
       {:ok, count}
   """
+  @spec enable_all_definitions_mirror() :: {non_neg_integer(), nil}
   def enable_all_definitions_mirror do
     entities = list_entities()
 
@@ -1430,6 +1451,7 @@ defmodule PhoenixKitEntities do
       iex> PhoenixKitEntities.disable_all_definitions_mirror()
       {:ok, count}
   """
+  @spec disable_all_definitions_mirror() :: {non_neg_integer(), nil}
   def disable_all_definitions_mirror do
     entities = list_entities()
 
@@ -1450,6 +1472,7 @@ defmodule PhoenixKitEntities do
       iex> PhoenixKitEntities.enable_all_data_mirror()
       {:ok, count}
   """
+  @spec enable_all_data_mirror() :: {non_neg_integer(), nil}
   def enable_all_data_mirror do
     entities = list_entities()
 
@@ -1470,6 +1493,7 @@ defmodule PhoenixKitEntities do
       iex> PhoenixKitEntities.disable_all_data_mirror()
       {:ok, count}
   """
+  @spec disable_all_data_mirror() :: {non_neg_integer(), nil}
   def disable_all_data_mirror do
     entities = list_entities()
 
@@ -1503,6 +1527,7 @@ defmodule PhoenixKitEntities do
       iex> get_entity_translations(entity_without_translations)
       %{}
   """
+  @spec get_entity_translations(t()) :: %{optional(String.t()) => map()}
   def get_entity_translations(%__MODULE__{settings: settings}) do
     (settings || %{})
     |> Map.get("translations", %{})
@@ -1519,6 +1544,7 @@ defmodule PhoenixKitEntities do
       iex> get_entity_translation(entity, "es-ES")
       %{"display_name" => "Productos", "display_name_plural" => "Productos", "description" => "..."}
   """
+  @spec get_entity_translation(t(), String.t()) :: map() | nil
   def get_entity_translation(%__MODULE__{} = entity, lang_code) when is_binary(lang_code) do
     primary = %{
       "display_name" => entity.display_name,
@@ -1546,6 +1572,8 @@ defmodule PhoenixKitEntities do
       ...> })
       {:ok, %PhoenixKitEntities{}}
   """
+  @spec set_entity_translation(t(), String.t(), map()) ::
+          {:ok, t()} | {:error, Ecto.Changeset.t()}
   def set_entity_translation(%__MODULE__{} = entity, lang_code, attrs)
       when is_binary(lang_code) and is_map(attrs) do
     current_settings = entity.settings || %{}
@@ -1585,6 +1613,8 @@ defmodule PhoenixKitEntities do
       iex> remove_entity_translation(entity, "es-ES")
       {:ok, %PhoenixKitEntities{}}
   """
+  @spec remove_entity_translation(t(), String.t()) ::
+          {:ok, t()} | {:error, Ecto.Changeset.t()}
   def remove_entity_translation(%__MODULE__{} = entity, lang_code)
       when is_binary(lang_code) do
     current_settings = entity.settings || %{}
@@ -1611,6 +1641,7 @@ defmodule PhoenixKitEntities do
       iex> PhoenixKitEntities.multilang_enabled?()
       true
   """
+  @spec multilang_enabled?() :: boolean()
   def multilang_enabled?, do: Multilang.enabled?()
 
   # ============================================================================
@@ -1638,6 +1669,7 @@ defmodule PhoenixKitEntities do
   @spec resolve_language(t(), String.t() | nil) :: t()
   def resolve_language(entity, nil), do: entity
 
+  @spec resolve_language(t(), String.t()) :: t()
   def resolve_language(%__MODULE__{} = entity, lang_code) when is_binary(lang_code) do
     translation = get_entity_translation(entity, lang_code)
 
@@ -1665,11 +1697,13 @@ defmodule PhoenixKitEntities do
   @spec resolve_languages([t()], String.t() | nil) :: [t()]
   def resolve_languages(entities, nil), do: entities
 
+  @spec resolve_languages([t()], String.t()) :: [t()]
   def resolve_languages(entities, lang_code) when is_list(entities) and is_binary(lang_code) do
     Enum.map(entities, &resolve_language(&1, lang_code))
   end
 
   @doc false
+  @spec maybe_resolve_lang(t(), keyword()) :: t()
   def maybe_resolve_lang(entity, opts) when is_list(opts) do
     case Keyword.get(opts, :lang) do
       nil -> entity
