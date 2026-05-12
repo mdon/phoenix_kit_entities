@@ -32,24 +32,84 @@ defmodule PhoenixKitEntities.Web.EntityForm do
   def mount(_params, _session, socket) do
     # Defer DB query to handle_params/3 — mount runs twice (HTTP + WebSocket),
     # handle_params runs once. See Phoenix iron law.
-    {:ok, socket}
+    # Capture the page the user came from (WS connect only) so the
+    # "and Return" button can route back there. Validated as an
+    # internal admin path; falls back to the entities list otherwise.
+    return_to =
+      if connected?(socket) do
+        socket |> get_connect_params() |> referer_to_return_path()
+      end
+
+    {:ok, assign(socket, :return_to_path, return_to)}
   end
 
   @impl true
-  def handle_params(%{"id" => id} = _params, _uri, socket) do
+  def handle_params(%{"id" => id} = _params, uri, socket) do
     # Edit mode
     entity = Entities.get_entity!(id)
     changeset = Entities.change_entity(entity)
 
-    {:noreply, hydrate_entity_form(socket, entity, changeset, gettext("Edit Entity"))}
+    socket =
+      socket
+      |> drop_self_referer(uri)
+      |> hydrate_entity_form(entity, changeset, gettext("Edit Entity"))
+
+    {:noreply, socket}
   end
 
-  def handle_params(_params, _uri, socket) do
+  def handle_params(_params, uri, socket) do
     # Create mode
     entity = %Entities{}
     changeset = Entities.change_entity(entity)
 
-    {:noreply, hydrate_entity_form(socket, entity, changeset, gettext("New Entity"))}
+    socket =
+      socket
+      |> drop_self_referer(uri)
+      |> hydrate_entity_form(entity, changeset, gettext("New Entity"))
+
+    {:noreply, socket}
+  end
+
+  # Pull `_live_referer` out of the connect params, parse the path, and
+  # return it only if it looks like an internal admin path. External or
+  # malformed referrers fall back to nil so the save handler routes to
+  # the entities list. Defensive — never trust a redirect target that
+  # rides in on a client-supplied param.
+  defp referer_to_return_path(%{"_live_referer" => referer}) when is_binary(referer) do
+    case URI.parse(referer) do
+      %URI{path: path} when is_binary(path) ->
+        if internal_admin_path?(path), do: path, else: nil
+
+      _ ->
+        nil
+    end
+  end
+
+  defp referer_to_return_path(_), do: nil
+
+  # An "admin path" lives under <url_prefix>/.../admin/. We don't trust
+  # arbitrary site paths — only the admin area.
+  defp internal_admin_path?(path) do
+    String.starts_with?(path, "/") and String.contains?(path, "/admin")
+  end
+
+  # If the referrer is the same page we're rendering (e.g. user reloaded
+  # the edit page), drop it so "and Return" doesn't no-op back to here.
+  defp drop_self_referer(socket, uri) do
+    case socket.assigns[:return_to_path] do
+      nil ->
+        socket
+
+      path ->
+        current_path = URI.parse(uri).path
+
+        if current_path && String.trim_trailing(current_path, "/") ==
+             String.trim_trailing(path, "/") do
+          assign(socket, :return_to_path, nil)
+        else
+          socket
+        end
+    end
   end
 
   defp hydrate_entity_form(socket, entity, _changeset, page_title) do
@@ -185,9 +245,12 @@ defmodule PhoenixKitEntities.Web.EntityForm do
     end
   end
 
-  def handle_event("save", %{"entities" => entity_params}, socket) do
+  def handle_event("save", %{"entities" => entity_params} = params, socket) do
     if socket.assigns[:lock_owner?] do
-      do_save(entity_params, socket)
+      # "Create and Return" / "Update and Return" submits a second button
+      # named `return_to_list=true`; the regular Create/Update button omits it.
+      return_to_list? = params["return_to_list"] == "true"
+      do_save(entity_params, assign(socket, :return_to_list, return_to_list?))
     else
       {:noreply, put_flash(socket, :error, gettext("Cannot save - you are spectating"))}
     end
@@ -976,29 +1039,52 @@ defmodule PhoenixKitEntities.Web.EntityForm do
   end
 
   defp handle_save_success(socket, saved_entity) do
-    if socket.assigns.entity.uuid do
-      changeset = Entities.change_entity(saved_entity)
+    locale = socket.assigns[:current_locale] || "en"
 
-      socket =
-        socket
-        |> assign(:entity, saved_entity)
-        |> assign(:changeset, changeset)
-        |> assign(:fields, saved_entity.fields_definition || [])
-        |> assign(:sort_mode, Entities.get_sort_mode(saved_entity))
-        |> put_flash(:info, gettext("Entity saved successfully"))
+    cond do
+      socket.assigns[:return_to_list] ->
+        flash =
+          if socket.assigns.entity.uuid,
+            do: gettext("Entity saved successfully"),
+            else: gettext("Entity created successfully")
 
-      reply_with_broadcast(socket)
-    else
-      locale = socket.assigns[:current_locale] || "en"
+        # Prefer the page the user came from (captured at mount and
+        # validated as an internal admin path); fall back to the
+        # entities list. `Routes.path/2` already carries the URL prefix
+        # so the captured path is used as-is.
+        return_target =
+          socket.assigns[:return_to_path] ||
+            Routes.path("/admin/entities", locale: locale)
 
-      socket =
-        socket
-        |> put_flash(:info, gettext("Entity created successfully"))
-        |> push_navigate(
-          to: Routes.path("/admin/entities/#{saved_entity.uuid}/edit", locale: locale)
-        )
+        socket =
+          socket
+          |> put_flash(:info, flash)
+          |> push_navigate(to: return_target)
 
-      {:noreply, socket}
+        {:noreply, socket}
+
+      socket.assigns.entity.uuid ->
+        changeset = Entities.change_entity(saved_entity)
+
+        socket =
+          socket
+          |> assign(:entity, saved_entity)
+          |> assign(:changeset, changeset)
+          |> assign(:fields, saved_entity.fields_definition || [])
+          |> assign(:sort_mode, Entities.get_sort_mode(saved_entity))
+          |> put_flash(:info, gettext("Entity saved successfully"))
+
+        reply_with_broadcast(socket)
+
+      true ->
+        socket =
+          socket
+          |> put_flash(:info, gettext("Entity created successfully"))
+          |> push_navigate(
+            to: Routes.path("/admin/entities/#{saved_entity.uuid}/edit", locale: locale)
+          )
+
+        {:noreply, socket}
     end
   end
 
@@ -1679,14 +1765,26 @@ defmodule PhoenixKitEntities.Web.EntityForm do
           phx-submit="save"
           class="space-y-8"
         >
-          <div class="flex justify-end">
+          <div class="flex justify-end gap-2">
             <button
               type="submit"
-              class="btn btn-primary"
+              class="btn btn-primary btn-outline"
               disabled={!@changeset.valid? or @readonly?}
               phx-disable-with={gettext("Saving…")}
             >
               {if @entity.uuid, do: gettext("Update Entity"), else: gettext("Create Entity")}
+            </button>
+            <button
+              type="submit"
+              name="return_to_list"
+              value="true"
+              class="btn btn-primary"
+              disabled={!@changeset.valid? or @readonly?}
+              phx-disable-with={gettext("Saving…")}
+            >
+              {if @entity.uuid,
+                do: gettext("Update and Return"),
+                else: gettext("Create and Return")}
             </button>
           </div>
 
@@ -2824,14 +2922,28 @@ defmodule PhoenixKitEntities.Web.EntityForm do
               </button>
             </div>
 
-            <button
-              type="submit"
-              class="btn btn-primary"
-              disabled={!@changeset.valid? or @readonly?}
-              phx-disable-with={gettext("Saving…")}
-            >
-              {if @entity.uuid, do: gettext("Update Entity"), else: gettext("Create Entity")}
-            </button>
+            <div class="flex gap-2">
+              <button
+                type="submit"
+                class="btn btn-primary btn-outline"
+                disabled={!@changeset.valid? or @readonly?}
+                phx-disable-with={gettext("Saving…")}
+              >
+                {if @entity.uuid, do: gettext("Update Entity"), else: gettext("Create Entity")}
+              </button>
+              <button
+                type="submit"
+                name="return_to_list"
+                value="true"
+                class="btn btn-primary"
+                disabled={!@changeset.valid? or @readonly?}
+                phx-disable-with={gettext("Saving…")}
+              >
+                {if @entity.uuid,
+                  do: gettext("Update and Return"),
+                  else: gettext("Create and Return")}
+              </button>
+            </div>
           </div>
         </.form>
 
