@@ -46,6 +46,7 @@ defmodule PhoenixKitEntities.Errors do
           | :already_trashed
           | :not_trashed
           | :referenced_by_external
+          | :has_children
 
   @typedoc """
   Tagged tuples carrying interpolation context.
@@ -73,6 +74,12 @@ defmodule PhoenixKitEntities.Errors do
   def message(:referenced_by_external) do
     gettext(
       "Cannot permanently delete: this record is referenced by other tables in the parent application. Restore it or remove the references first."
+    )
+  end
+
+  def message(:has_children) do
+    gettext(
+      "Cannot permanently delete: this record has child records. Reassign or delete its children first."
     )
   end
 

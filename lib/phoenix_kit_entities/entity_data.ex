@@ -94,6 +94,7 @@ defmodule PhoenixKitEntities.EntityData do
            only: [
              :uuid,
              :entity_uuid,
+             :parent_uuid,
              :title,
              :slug,
              :status,
@@ -117,6 +118,17 @@ defmodule PhoenixKitEntities.EntityData do
 
     belongs_to(:entity, Entities, foreign_key: :entity_uuid, references: :uuid, type: UUIDv7)
 
+    belongs_to(:parent, __MODULE__,
+      foreign_key: :parent_uuid,
+      references: :uuid,
+      type: UUIDv7
+    )
+
+    has_many(:children, __MODULE__,
+      foreign_key: :parent_uuid,
+      references: :uuid
+    )
+
     belongs_to(:creator, User,
       foreign_key: :created_by_uuid,
       references: :uuid,
@@ -138,6 +150,7 @@ defmodule PhoenixKitEntities.EntityData do
     entity_data
     |> cast(attrs, [
       :entity_uuid,
+      :parent_uuid,
       :title,
       :slug,
       :status,
@@ -154,10 +167,109 @@ defmodule PhoenixKitEntities.EntityData do
     |> validate_length(:slug, max: 255)
     |> validate_inclusion(:status, @valid_statuses)
     |> validate_slug_format()
+    |> validate_not_self_parent()
+    |> validate_parent_same_entity()
+    |> validate_parent_not_descendant()
     |> sanitize_rich_text_data()
     |> validate_data_against_entity()
     |> foreign_key_constraint(:entity_uuid)
+    |> foreign_key_constraint(:parent_uuid)
     |> maybe_set_timestamps()
+  end
+
+  defp validate_not_self_parent(changeset) do
+    uuid = get_field(changeset, :uuid)
+    parent = get_field(changeset, :parent_uuid)
+
+    if not is_nil(uuid) and not is_nil(parent) and uuid == parent do
+      add_error(changeset, :parent_uuid, gettext("a record cannot be its own parent"))
+    else
+      changeset
+    end
+  end
+
+  # Same-entity enforcement happens here (the DB self-FK has no view of
+  # entity_uuid, so we look up the parent and compare). NULL parent_uuid
+  # is fine — that means "root".
+  defp validate_parent_same_entity(changeset) do
+    entity_uuid = get_field(changeset, :entity_uuid)
+    parent_uuid = get_field(changeset, :parent_uuid)
+
+    case {entity_uuid, parent_uuid} do
+      {nil, _} -> changeset
+      {_, nil} -> changeset
+      {ent, parent_id} -> check_parent_entity_match(changeset, ent, parent_id)
+    end
+  end
+
+  defp check_parent_entity_match(changeset, entity_uuid, parent_uuid) do
+    case repo().get(__MODULE__, parent_uuid) do
+      nil ->
+        add_error(changeset, :parent_uuid, gettext("parent record does not exist"))
+
+      %__MODULE__{entity_uuid: ^entity_uuid} ->
+        changeset
+
+      _other_entity ->
+        add_error(
+          changeset,
+          :parent_uuid,
+          gettext("parent must belong to the same entity")
+        )
+    end
+  rescue
+    # If the repo isn't started yet (compile-time, etc.) leave parent
+    # alone — the DB-level FK will catch a bogus id at insert time.
+    DBConnection.ConnectionError -> changeset
+    Postgrex.Error -> changeset
+  end
+
+  # Walk up from the proposed parent toward the root; if we ever hit
+  # the row we are editing, the parent assignment would create a cycle.
+  # Only meaningful when both uuids are present and distinct (the
+  # self-parent check covers the equal case).
+  defp validate_parent_not_descendant(changeset) do
+    uuid = get_field(changeset, :uuid)
+    parent_uuid = get_field(changeset, :parent_uuid)
+
+    case {uuid, parent_uuid} do
+      {nil, _} -> changeset
+      {_, nil} -> changeset
+      {same, same} -> changeset
+      {self_id, parent_id} -> check_no_cycle(changeset, self_id, parent_id)
+    end
+  end
+
+  defp check_no_cycle(changeset, self_id, parent_id) do
+    if ancestor_chain_contains?(parent_id, self_id, 0) do
+      add_error(
+        changeset,
+        :parent_uuid,
+        gettext("parent cannot be one of this record's descendants")
+      )
+    else
+      changeset
+    end
+  rescue
+    DBConnection.ConnectionError -> changeset
+    Postgrex.Error -> changeset
+  end
+
+  # Bounded walk — a tree this deep is a bug, but the guard keeps the
+  # validator from looping forever if the DB somehow already has a
+  # cycle (shouldn't happen, but be defensive).
+  @max_ancestor_depth 64
+
+  defp ancestor_chain_contains?(_uuid, _target, depth) when depth >= @max_ancestor_depth,
+    do: false
+
+  defp ancestor_chain_contains?(uuid, target, depth) do
+    case repo().get(__MODULE__, uuid) do
+      nil -> false
+      %__MODULE__{parent_uuid: nil} -> false
+      %__MODULE__{parent_uuid: ^target} -> true
+      %__MODULE__{parent_uuid: next} -> ancestor_chain_contains?(next, target, depth + 1)
+    end
   end
 
   defp validate_entity_reference(changeset) do
@@ -616,6 +728,90 @@ defmodule PhoenixKitEntities.EntityData do
     |> exclude_trashed(opts)
     |> repo().all()
     |> maybe_resolve_langs(opts)
+  end
+
+  @doc """
+  Returns the entity's records as a depth-ordered flat list for
+  WordPress-style indented rendering — parents precede their children,
+  siblings preserve the entity's current sort order.
+
+  Each element is `%{record: %EntityData{}, depth: integer}` where
+  depth `0` is a root row.
+
+  ## Options
+
+  * `:include_trashed` — when `true`, include trashed rows (default `false`)
+  * `:lang` — resolve multilingual fields to the given locale
+  * any other opt accepted by `list_by_entity/2`
+  """
+  @spec list_tree(binary(), keyword()) :: [%{record: t(), depth: non_neg_integer()}]
+  def list_tree(entity_uuid, opts \\ []) when is_binary(entity_uuid) do
+    rows = list_by_entity(entity_uuid, opts)
+    build_tree(rows)
+  end
+
+  @doc """
+  Returns all descendant UUIDs of a record (children, grandchildren, …).
+
+  Used by the parent picker to exclude rows that would create a cycle.
+  Walks the in-memory tree of the same entity rather than recursing
+  through the DB. Trashed rows are excluded by default — they cannot
+  meaningfully participate in a new cycle and including them would
+  leak trashed rows into the picker's exclusion set.
+
+  Returns `[]` for unknown / NULL `uuid`.
+
+  ## Options
+
+  * `:include_trashed` — when `true`, include trashed descendants
+  """
+  @spec descendant_uuids(binary() | nil, binary(), keyword()) :: [binary()]
+  def descendant_uuids(uuid, entity_uuid, opts \\ [])
+
+  def descendant_uuids(nil, _entity_uuid, _opts), do: []
+
+  def descendant_uuids(uuid, entity_uuid, opts)
+      when is_binary(uuid) and is_binary(entity_uuid) do
+    rows = list_by_entity(entity_uuid, opts)
+    children_by_parent = group_by_parent(rows)
+    collect_descendants(uuid, children_by_parent, [])
+  end
+
+  # Build a depth-ordered flat list from a sibling-ordered row list.
+  # Rows whose parent_uuid points outside the input set surface as
+  # roots (defensive — a misaligned parent reference can't hide rows
+  # from the admin view).
+  defp build_tree(rows) do
+    by_parent = group_by_parent(rows)
+    known_uuids = MapSet.new(rows, & &1.uuid)
+
+    roots =
+      Enum.filter(rows, fn row ->
+        is_nil(row.parent_uuid) or not MapSet.member?(known_uuids, row.parent_uuid)
+      end)
+
+    Enum.flat_map(roots, &walk_tree(&1, by_parent, 0))
+  end
+
+  defp walk_tree(row, by_parent, depth) do
+    children = Map.get(by_parent, row.uuid, [])
+    [%{record: row, depth: depth} | Enum.flat_map(children, &walk_tree(&1, by_parent, depth + 1))]
+  end
+
+  defp group_by_parent(rows) do
+    Enum.group_by(rows, & &1.parent_uuid)
+  end
+
+  defp collect_descendants(uuid, children_by_parent, acc) do
+    case Map.get(children_by_parent, uuid, []) do
+      [] ->
+        acc
+
+      children ->
+        Enum.reduce(children, acc, fn child, inner_acc ->
+          collect_descendants(child.uuid, children_by_parent, [child.uuid | inner_acc])
+        end)
+    end
   end
 
   @doc """
@@ -1087,10 +1283,38 @@ defmodule PhoenixKitEntities.EntityData do
       {:error, :referenced_by_external}
   """
   @spec delete(t(), keyword()) ::
-          {:ok, t()} | {:error, Ecto.Changeset.t() | :referenced_by_external}
+          {:ok, t()}
+          | {:error, Ecto.Changeset.t() | :referenced_by_external | :has_children}
   def delete(%__MODULE__{} = entity_data, opts \\ []) do
-    repo().delete(entity_data)
-    |> notify_data_event(:deleted, opts)
+    if has_live_children?(entity_data.uuid) do
+      log_data_error_activity(:deleted, opts)
+      {:error, :has_children}
+    else
+      do_delete(entity_data, opts)
+    end
+  end
+
+  defp do_delete(entity_data, opts) do
+    # Null any trashed children's parent_uuid first so the DB-level
+    # self-FK doesn't block the parent's delete. Live children would
+    # have tripped `has_live_children?/1` already.
+    txn =
+      repo().transaction(fn ->
+        nullify_trashed_children([entity_data.uuid])
+
+        case repo().delete(entity_data) do
+          {:ok, deleted} -> deleted
+          {:error, changeset} -> repo().rollback(changeset)
+        end
+      end)
+
+    case txn do
+      {:ok, deleted} ->
+        notify_data_event({:ok, deleted}, :deleted, opts)
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:error, changeset}
+    end
   rescue
     # Ecto wraps Postgrex FK violations on Repo.delete in
     # `Ecto.ConstraintError` because `delete/1` doesn't go through a
@@ -1110,6 +1334,27 @@ defmodule PhoenixKitEntities.EntityData do
       else
         reraise e, __STACKTRACE__
       end
+  end
+
+  defp nullify_trashed_children(parent_uuids) when is_list(parent_uuids) do
+    from(d in __MODULE__,
+      where: d.parent_uuid in ^parent_uuids and d.status == ^@soft_delete_status
+    )
+    |> repo().update_all(set: [parent_uuid: nil])
+  end
+
+  # "Live" children = non-trashed rows whose parent_uuid points at this
+  # record. Trashed children don't block hard-delete: their row stays
+  # alive in the DB only to keep parent-app FKs resolving — for
+  # entity-internal tree integrity they're invisible.
+  defp has_live_children?(uuid) when is_binary(uuid) do
+    from(d in __MODULE__,
+      where: d.parent_uuid == ^uuid and d.status != ^@soft_delete_status,
+      select: 1,
+      limit: 1
+    )
+    |> repo().one()
+    |> Kernel.!=(nil)
   end
 
   @doc """
@@ -1684,25 +1929,48 @@ defmodule PhoenixKitEntities.EntityData do
       {:error, :referenced_by_external}
   """
   @spec bulk_delete([String.t()], keyword()) ::
-          {non_neg_integer(), nil} | {:error, :referenced_by_external}
+          {non_neg_integer(), nil}
+          | {:error, :referenced_by_external | :has_children}
   def bulk_delete(uuids, opts \\ []) when is_list(uuids) do
-    {count, _} =
-      result =
-      from(d in __MODULE__, where: d.uuid in ^uuids)
-      |> repo().delete_all()
+    if has_external_live_children?(uuids) do
+      log_data_error_activity(:bulk_deleted, opts)
+      {:error, :has_children}
+    else
+      do_bulk_delete(uuids, opts)
+    end
+  end
 
-    PhoenixKitEntities.ActivityLog.log(%{
-      action: "entity_data.bulk_deleted",
-      mode: "manual",
-      actor_uuid: Keyword.get(opts, :actor_uuid),
-      resource_type: "entity_data",
-      metadata: %{
-        "count" => count,
-        "uuid_count" => length(uuids)
-      }
-    })
+  defp do_bulk_delete(uuids, opts) do
+    txn =
+      repo().transaction(fn ->
+        # Null trashed children of any row in the input set before
+        # deleting, so the self-FK doesn't block. Live external
+        # children would have tripped `has_external_live_children?/1`.
+        nullify_trashed_children(uuids)
 
-    result
+        from(d in __MODULE__, where: d.uuid in ^uuids)
+        |> repo().delete_all()
+      end)
+
+    case txn do
+      {:ok, {count, _} = result} ->
+        PhoenixKitEntities.ActivityLog.log(%{
+          action: "entity_data.bulk_deleted",
+          mode: "manual",
+          actor_uuid: Keyword.get(opts, :actor_uuid),
+          resource_type: "entity_data",
+          metadata: %{
+            "count" => count,
+            "uuid_count" => length(uuids)
+          }
+        })
+
+        result
+
+      {:error, _} ->
+        log_data_error_activity(:bulk_deleted, opts)
+        {:error, :referenced_by_external}
+    end
   rescue
     e in Postgrex.Error ->
       if foreign_key_or_not_null_violation?(e) do
@@ -1711,6 +1979,25 @@ defmodule PhoenixKitEntities.EntityData do
       else
         reraise e, __STACKTRACE__
       end
+  end
+
+  # A child is "external" to the bulk_delete set if its parent is being
+  # deleted but the child itself is not. Children that are also in the
+  # input list are fine — they get deleted alongside their parent.
+  # Trashed children don't block (same rule as the single-record path).
+  defp has_external_live_children?([]), do: false
+
+  defp has_external_live_children?(uuids) when is_list(uuids) do
+    from(d in __MODULE__,
+      where:
+        d.parent_uuid in ^uuids and
+          d.status != ^@soft_delete_status and
+          d.uuid not in ^uuids,
+      select: 1,
+      limit: 1
+    )
+    |> repo().one()
+    |> Kernel.!=(nil)
   end
 
   @doc """
