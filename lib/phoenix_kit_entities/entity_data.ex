@@ -1919,9 +1919,7 @@ defmodule PhoenixKitEntities.EntityData do
         # callback that reports "Used by 0 rows" is the surprising
         # default this guard was supposed to prevent.
         e in [DBConnection.ConnectionError, Postgrex.Error] ->
-          Logger.warning(
-            "[Entities] reverse_references callback failed: #{Exception.message(e)}"
-          )
+          Logger.warning("[Entities] reverse_references callback failed: #{Exception.message(e)}")
 
           acc
       end

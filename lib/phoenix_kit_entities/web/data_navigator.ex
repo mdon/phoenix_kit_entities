@@ -366,8 +366,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
            put_flash(socket, :error, PhoenixKitEntities.Errors.message(:referenced_by_external))}
 
         {:error, :has_children} ->
-          {:noreply,
-           put_flash(socket, :error, PhoenixKitEntities.Errors.message(:has_children))}
+          {:noreply, put_flash(socket, :error, PhoenixKitEntities.Errors.message(:has_children))}
 
         {:error, _} ->
           {:noreply, put_flash(socket, :error, gettext("Failed to delete record"))}
@@ -618,8 +617,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
          put_flash(socket, :error, PhoenixKitEntities.Errors.message(:referenced_by_external))}
 
       {:error, :has_children} ->
-        {:noreply,
-         put_flash(socket, :error, PhoenixKitEntities.Errors.message(:has_children))}
+        {:noreply, put_flash(socket, :error, PhoenixKitEntities.Errors.message(:has_children))}
     end
   end
 

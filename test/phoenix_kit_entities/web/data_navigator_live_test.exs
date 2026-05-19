@@ -69,9 +69,7 @@ defmodule PhoenixKitEntities.Web.DataNavigatorLiveTest do
       # the menu's unique id so the card view's inline button doesn't
       # match too.
       view
-      |> element(
-        "#data-menu-#{record.uuid} button[phx-click='archive_data']"
-      )
+      |> element("#data-menu-#{record.uuid} button[phx-click='archive_data']")
       |> render_click()
 
       assert_activity_logged("entity_data.updated",
@@ -94,9 +92,7 @@ defmodule PhoenixKitEntities.Web.DataNavigatorLiveTest do
       {:ok, view, _html} = live(conn, navigator_url(ctx.entity, status: "archived"))
 
       view
-      |> element(
-        "#data-menu-#{record.uuid} button[phx-click='restore_data']"
-      )
+      |> element("#data-menu-#{record.uuid} button[phx-click='restore_data']")
       |> render_click()
 
       assert_activity_logged("entity_data.updated",
