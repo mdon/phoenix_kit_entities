@@ -1,3 +1,15 @@
+## 0.2.3 - 2026-05-21
+
+### Added
+- `PhoenixKitEntities.UrlResolver.locale_prefix/2` — resolves the constant locale path-prefix (`"/en"`, `""`, …) for a `(language, is_default)` pair. Built for batch callers like sitemap generation: resolve once and prepend to many paths instead of re-reading the site-wide locale settings per URL.
+
+### Changed
+- `UrlResolver` now delegates to the framework-shared `phoenix_kit` core helpers instead of maintaining parallel copies: `build_path_with_language/3`'s prefix decision goes through `PhoenixKit.Modules.Sitemap.LocalePath.emit_prefix?/2` (the same policy core's own sitemap sources use), and the boot-safe primary-language check uses `PhoenixKit.Modules.Languages.prefixless_primary_safe?/0` (which also handles the mix-task context the previous local rescue missed). Behaviour-preserving.
+- `SitemapSource` resolves the locale prefix once per generation in `do_collect/1` and `sub_sitemaps/1` and threads it through the entry builders, replacing the per-URL `(language, is_default)` arguments. The previous code called `build_path_with_language/3` per generated URL, each re-reading the site-wide locale settings via `PhoenixKit.Cache` (several serialized `GenServer.call`s) — roughly `4·N·L` lookups returning the same constant. The hot path is now a plain string prepend; per-generation settings lookups drop from O(N·L) to O(1).
+
+### Fixed
+- `EntityData.public_path/3` and `public_alternates/3` docstrings documented the pre-`default_language_no_prefix` behaviour ("primary language → no prefix") and shipped example URLs that were wrong under the default (setting OFF) — the primary language now gets the prefix (`/en/products/my-item`) unless the site-wide setting is ON. Prose and examples corrected. (These were illustrative, non-executed examples, so the suite was unaffected.)
+
 ## 0.2.2 - 2026-05-12
 
 ### Added
