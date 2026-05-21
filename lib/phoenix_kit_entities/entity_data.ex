@@ -1656,7 +1656,8 @@ defmodule PhoenixKitEntities.EntityData do
   Locale prefix policy (matches `PhoenixKit.Utils.Routes.path/2`):
   - `:locale` omitted or `nil` → no prefix
   - Single-language mode → no prefix
-  - Primary language → no prefix (default locale served at unprefixed URL)
+  - Primary language → follows the site-wide `default_language_no_prefix`
+    setting: prefixed by default (setting OFF), unprefixed when ON
   - Other locales → prefixed with the base code (`/es/...`, `/ru/...`)
 
   Slug resolution:
@@ -1678,8 +1679,8 @@ defmodule PhoenixKitEntities.EntityData do
       iex> EntityData.public_path(entity, record, locale: "es-ES")
       "/es/products/my-item"
 
-      iex> EntityData.public_path(entity, record, locale: "en-US")  # primary language
-      "/products/my-item"
+      iex> EntityData.public_path(entity, record, locale: "en-US")  # primary, default_language_no_prefix OFF (default)
+      "/en/products/my-item"
   """
   @spec public_path(map(), map(), keyword()) :: String.t()
   def public_path(entity, record, opts \\ []) do
@@ -1753,13 +1754,17 @@ defmodule PhoenixKitEntities.EntityData do
   ## Output shape
 
       %{
-        canonical: "https://site.com/products/my-item",
+        canonical: "https://site.com/en/products/my-item",
         alternates: [
-          %{locale: "en", href: "https://site.com/products/my-item"},
+          %{locale: "en", href: "https://site.com/en/products/my-item"},
           %{locale: "es", href: "https://site.com/es/products/mi-item"},
-          %{locale: "x-default", href: "https://site.com/products/my-item"}
+          %{locale: "x-default", href: "https://site.com/en/products/my-item"}
         ]
       }
+
+  The primary-language `canonical`/`href` shape follows the site-wide
+  `default_language_no_prefix` setting (prefixed by default, as shown
+  above; unprefixed — `/products/my-item` — when the setting is ON).
 
   Locales are emitted as base codes (`"en"`, `"es"`) — matching the locale
   prefix policy used in `public_path/3` and Google's hreflang docs (which

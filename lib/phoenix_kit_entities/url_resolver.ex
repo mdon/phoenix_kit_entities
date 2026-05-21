@@ -9,6 +9,7 @@ defmodule PhoenixKitEntities.UrlResolver do
   require Logger
 
   alias PhoenixKit.Modules.Languages
+  alias PhoenixKit.Modules.Sitemap.LocalePath
   alias PhoenixKit.Modules.Sitemap.RouteResolver
   alias PhoenixKit.Settings
   alias PhoenixKit.Utils.Multilang
@@ -303,22 +304,22 @@ defmodule PhoenixKitEntities.UrlResolver do
   Adds a language prefix to a path for the sitemap.
 
   Used by `PhoenixKitEntities.SitemapSource` for hreflang-aware sitemap
-  entries. The primary language follows the site-wide
-  `Languages.default_language_no_prefix?/0` setting (when ON, skip the
-  prefix; when OFF, include it). Every other language always gets the
-  prefix in multilang mode.
+  entries. The prefix decision is delegated to the framework-shared
+  `PhoenixKit.Modules.Sitemap.LocalePath.emit_prefix?/2` (the same policy
+  every core sitemap source uses), so entities' sitemap stays consistent
+  with publishing/posts/static. This helper owns only the formatting.
 
-  Pass `is_default: true` so this helper can apply the setting. Consumers
-  building public links should prefer `add_public_locale_prefix/2`, which
-  takes the same setting into account via its primary-language branch.
+  Pass `is_default: true` only when `language` is the site's primary —
+  `emit_prefix?/2` trusts that flag. Consumers building public links
+  should prefer `add_public_locale_prefix/2`, which derives primary-ness
+  from the locale itself.
   """
   @spec build_path_with_language(String.t(), String.t() | nil, boolean()) :: String.t()
   def build_path_with_language(path, language, is_default \\ true) do
-    cond do
-      is_nil(language) -> path
-      single_language_mode?() -> path
-      is_default and prefixless_primary?() -> path
-      true -> "/#{Languages.DialectMapper.extract_base(language)}#{path}"
+    if LocalePath.emit_prefix?(language, is_default) do
+      "/#{Languages.DialectMapper.extract_base(language)}#{path}"
+    else
+      path
     end
   end
 
@@ -350,7 +351,7 @@ defmodule PhoenixKitEntities.UrlResolver do
       single_language_mode?() ->
         path
 
-      primary_language_base?(locale) and prefixless_primary?() ->
+      primary_language_base?(locale) and Languages.prefixless_primary_safe?() ->
         path
 
       true ->
@@ -359,16 +360,6 @@ defmodule PhoenixKitEntities.UrlResolver do
           base -> "/#{base}#{path}"
         end
     end
-  end
-
-  # Reads the site-wide setting `Languages.default_language_no_prefix?/0`
-  # (managed on `/admin/settings/languages`). Wrapped to survive boot /
-  # mix-task contexts where the settings table may not exist yet — same
-  # defensive shape as `single_language_mode?/0`.
-  defp prefixless_primary? do
-    Languages.default_language_no_prefix?()
-  rescue
-    _ -> false
   end
 
   # Extracts a base locale code and validates it against a strict allowlist
