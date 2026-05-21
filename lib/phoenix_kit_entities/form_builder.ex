@@ -39,6 +39,7 @@ defmodule PhoenixKitEntities.FormBuilder do
   import PhoenixKitWeb.Components.Core.FormFieldLabel, only: [label: 1]
   use Gettext, backend: PhoenixKitWeb.Gettext
 
+  alias PhoenixKit.Utils.Format
   alias PhoenixKit.Utils.Multilang
 
   @doc """
@@ -771,16 +772,7 @@ defmodule PhoenixKitEntities.FormBuilder do
     """
   end
 
-  # Helper function to format file sizes
-  defp format_bytes(bytes) when bytes < 1024, do: "#{bytes} B"
-
-  defp format_bytes(bytes) when bytes < 1_048_576 do
-    "#{Float.round(bytes / 1024, 1)} KB"
-  end
-
-  defp format_bytes(bytes) do
-    "#{Float.round(bytes / 1_048_576, 1)} MB"
-  end
+  defp format_bytes(bytes), do: Format.bytes(bytes)
 
   @doc """
   Validates entity data against field definitions.

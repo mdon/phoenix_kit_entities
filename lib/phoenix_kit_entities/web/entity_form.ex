@@ -103,8 +103,9 @@ defmodule PhoenixKitEntities.Web.EntityForm do
       path ->
         current_path = URI.parse(uri).path
 
-        if current_path && String.trim_trailing(current_path, "/") ==
-             String.trim_trailing(path, "/") do
+        if current_path &&
+             String.trim_trailing(current_path, "/") ==
+               String.trim_trailing(path, "/") do
           assign(socket, :return_to_path, nil)
         else
           socket

@@ -237,26 +237,23 @@ defmodule PhoenixKitEntities.Web.Entities do
 
         <%!-- Entities Grid --%>
         <%= if Enum.empty?(@entities) do %>
-          <%!-- Empty State --%>
-          <div class="card bg-base-100 shadow-xl border-2 border-dashed border-base-300">
-            <div class="card-body text-center py-12">
-              <div class="text-6xl mb-4 opacity-50"><.icon name="hero-cube" class="w-6 h-6" /></div>
-              <h3 class="text-2xl font-semibold text-base-content/60 mb-4">
-                {gettext("No Entities Yet")}
-              </h3>
-              <p class="text-base-content/50 mb-6 max-w-md mx-auto">
-                {gettext(
-                  "Get started by creating your first custom content type. Think brands, products, team members, or any structured content you need."
-                )}
-              </p>
-              <.link
-                navigate={PhoenixKit.Utils.Routes.path("/admin/entities/new")}
-                class="btn btn-primary btn-lg"
-              >
-                <.icon name="hero-plus" class="w-5 h-5 mr-2" /> {gettext("Create Your First Entity")}
-              </.link>
-            </div>
-          </div>
+          <.empty_state
+            variant="featured"
+            icon="hero-cube"
+            title={gettext("No Entities Yet")}
+            description={
+              gettext(
+                "Get started by creating your first custom content type. Think brands, products, team members, or any structured content you need."
+              )
+            }
+          >
+            <.link
+              navigate={PhoenixKit.Utils.Routes.path("/admin/entities/new")}
+              class="btn btn-primary btn-lg"
+            >
+              <.icon name="hero-plus" class="w-5 h-5 mr-2" /> {gettext("Create Your First Entity")}
+            </.link>
+          </.empty_state>
         <% else %>
           <%!-- Table View: hidden on small screens, shown on md+ when table mode selected --%>
           <%= if @view_mode == "table" do %>
