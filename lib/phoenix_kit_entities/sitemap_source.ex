@@ -114,6 +114,9 @@ defmodule PhoenixKitEntities.SitemapSource do
       language = Keyword.get(opts, :language)
       include_index = Settings.get_boolean_setting("sitemap_entities_include_index", true)
       routes_cache = UrlResolver.build_routes_cache()
+      # Constant for the whole run — resolve the site-wide locale settings
+      # once instead of per generated URL.
+      locale_prefix = UrlResolver.locale_prefix(language, is_default)
 
       sub_maps =
         PhoenixKitEntities.list_active_entities()
@@ -124,8 +127,7 @@ defmodule PhoenixKitEntities.SitemapSource do
               entity,
               base_url,
               include_index,
-              language,
-              is_default,
+              locale_prefix,
               routes_cache
             )
 
@@ -185,6 +187,9 @@ defmodule PhoenixKitEntities.SitemapSource do
 
     # Optimization: Get all routes ONCE and build lookup map
     routes_cache = UrlResolver.build_routes_cache()
+    # Constant for the whole run — resolve the site-wide locale settings
+    # once instead of per generated URL.
+    locale_prefix = UrlResolver.locale_prefix(language, is_default)
 
     # Early exit if no public entity routes exist
     if map_size(routes_cache.entity_patterns) == 0 and
@@ -195,7 +200,7 @@ defmodule PhoenixKitEntities.SitemapSource do
       PhoenixKitEntities.list_active_entities()
       |> Enum.filter(&entity_has_public_route?(&1, routes_cache))
       |> Enum.flat_map(
-        &collect_entity_entries(&1, base_url, include_index, language, is_default, routes_cache)
+        &collect_entity_entries(&1, base_url, include_index, locale_prefix, routes_cache)
       )
     end
   end
@@ -225,29 +230,29 @@ defmodule PhoenixKitEntities.SitemapSource do
     has_explicit_route or has_catchall_route or has_settings_pattern or auto_pattern_enabled
   end
 
-  defp collect_entity_entries(entity, base_url, include_index, language, is_default, routes_cache) do
-    records = collect_entity_records(entity, base_url, language, is_default, routes_cache)
+  defp collect_entity_entries(entity, base_url, include_index, locale_prefix, routes_cache) do
+    records = collect_entity_records(entity, base_url, locale_prefix, routes_cache)
 
     if include_index do
-      prepend_index_entry(records, entity, base_url, language, is_default, routes_cache)
+      prepend_index_entry(records, entity, base_url, locale_prefix, routes_cache)
     else
       records
     end
   end
 
-  defp prepend_index_entry(records, entity, base_url, language, is_default, routes_cache) do
-    case collect_entity_index(entity, base_url, language, is_default, routes_cache) do
+  defp prepend_index_entry(records, entity, base_url, locale_prefix, routes_cache) do
+    case collect_entity_index(entity, base_url, locale_prefix, routes_cache) do
       nil -> records
       index_entry -> [index_entry | records]
     end
   end
 
-  defp collect_entity_records(entity, base_url, language, is_default, routes_cache) do
+  defp collect_entity_records(entity, base_url, locale_prefix, routes_cache) do
     if entity_requires_auth_cached?(entity, routes_cache) do
       Logger.debug("Sitemap: Entity '#{entity.name}' skipped - routes require authentication")
       []
     else
-      do_collect_entity_records(entity, base_url, language, is_default, routes_cache)
+      do_collect_entity_records(entity, base_url, locale_prefix, routes_cache)
     end
   rescue
     error ->
@@ -255,7 +260,7 @@ defmodule PhoenixKitEntities.SitemapSource do
       []
   end
 
-  defp do_collect_entity_records(entity, base_url, language, is_default, routes_cache) do
+  defp do_collect_entity_records(entity, base_url, locale_prefix, routes_cache) do
     url_pattern = UrlResolver.get_url_pattern_cached(entity, routes_cache)
     effective_pattern = url_pattern || get_fallback_pattern(entity)
 
@@ -266,7 +271,7 @@ defmodule PhoenixKitEntities.SitemapSource do
       records
       |> Enum.reject(&excluded?/1)
       |> Enum.map(fn record ->
-        build_entry(record, entity, effective_pattern, base_url, language, is_default)
+        build_entry(record, entity, effective_pattern, base_url, locale_prefix)
       end)
     else
       Logger.warning(
@@ -301,13 +306,13 @@ defmodule PhoenixKitEntities.SitemapSource do
   end
 
   # Collect index page entry for entity (e.g., /page, /products) - cached version
-  defp collect_entity_index(entity, base_url, language, is_default, routes_cache) do
+  defp collect_entity_index(entity, base_url, locale_prefix, routes_cache) do
     index_path = UrlResolver.get_index_path_cached(entity, routes_cache)
 
     if index_path do
       # Canonical path without language prefix (for hreflang grouping)
       canonical_path = index_path
-      path = UrlResolver.build_path_with_language(index_path, language, is_default)
+      path = locale_prefix <> index_path
       url = UrlResolver.build_url(path, base_url)
 
       UrlEntry.new(%{
@@ -367,10 +372,10 @@ defmodule PhoenixKitEntities.SitemapSource do
     end
   end
 
-  defp build_entry(record, entity, url_pattern, base_url, language, is_default) do
+  defp build_entry(record, entity, url_pattern, base_url, locale_prefix) do
     # Canonical path without language prefix (for hreflang grouping)
     canonical_path = UrlResolver.build_path(url_pattern, record)
-    path = UrlResolver.build_path_with_language(canonical_path, language, is_default)
+    path = locale_prefix <> canonical_path
     url = UrlResolver.build_url(path, base_url)
 
     UrlEntry.new(%{

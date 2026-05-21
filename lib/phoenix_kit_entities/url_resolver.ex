@@ -313,13 +313,32 @@ defmodule PhoenixKitEntities.UrlResolver do
   `emit_prefix?/2` trusts that flag. Consumers building public links
   should prefer `add_public_locale_prefix/2`, which derives primary-ness
   from the locale itself.
+
+  Resolves the site-wide locale settings on every call. When building
+  many URLs for the same `(language, is_default)` pair — e.g. a sitemap
+  run — resolve `locale_prefix/2` once and prepend it instead.
   """
   @spec build_path_with_language(String.t(), String.t() | nil, boolean()) :: String.t()
   def build_path_with_language(path, language, is_default \\ true) do
+    locale_prefix(language, is_default) <> path
+  end
+
+  @doc """
+  Resolves the constant locale path-prefix for a `(language, is_default)`
+  pair — `"/en"`, `""`, etc.
+
+  The decision (via `LocalePath.emit_prefix?/2`) and base-code extraction
+  read site-wide language settings, which are invariant across a single
+  sitemap generation. Resolve this once and prepend the result to each
+  record's path rather than calling `build_path_with_language/3` per URL,
+  which re-reads those settings every time.
+  """
+  @spec locale_prefix(String.t() | nil, boolean()) :: String.t()
+  def locale_prefix(language, is_default \\ true) do
     if LocalePath.emit_prefix?(language, is_default) do
-      "/#{Languages.DialectMapper.extract_base(language)}#{path}"
+      "/#{Languages.DialectMapper.extract_base(language)}"
     else
-      path
+      ""
     end
   end
 
