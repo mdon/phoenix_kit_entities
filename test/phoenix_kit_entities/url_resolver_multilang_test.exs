@@ -77,13 +77,17 @@ defmodule PhoenixKitEntities.UrlResolverMultilangTest do
     end
   end
 
-  describe "add_public_locale_prefix/2 in multilang mode" do
-    test "primary language gets no prefix" do
-      assert UrlResolver.add_public_locale_prefix("/foo", "en") == "/foo"
+  describe "add_public_locale_prefix/2 in multilang mode (default_language_no_prefix OFF)" do
+    # OFF is the default state in this setup — `languages_enabled` is set
+    # but no one writes `default_language_no_prefix`, so the getter falls
+    # back to false. Primary languages get the prefix like every other.
+
+    test "primary language gets the prefix (setting OFF)" do
+      assert UrlResolver.add_public_locale_prefix("/foo", "en") == "/en/foo"
     end
 
-    test "primary dialect (en-US) also gets no prefix because base matches" do
-      assert UrlResolver.add_public_locale_prefix("/foo", "en-US") == "/foo"
+    test "primary dialect (en-US) gets the prefix" do
+      assert UrlResolver.add_public_locale_prefix("/foo", "en-US") == "/en/foo"
     end
 
     test "non-primary base prepends /es" do
@@ -102,12 +106,58 @@ defmodule PhoenixKitEntities.UrlResolverMultilangTest do
       # safe_base_code/1 rejects anything that doesn't match ^[a-z]{2,3}$
       assert UrlResolver.add_public_locale_prefix("/foo", "../etc/passwd") == "/foo"
       assert UrlResolver.add_public_locale_prefix("/foo", "12") == "/foo"
-      assert UrlResolver.add_public_locale_prefix("/foo", "EN") == "/foo"
+      # Uppercase "EN" extracts to "en" via DialectMapper. With the
+      # setting OFF, primary languages get the prefix like everyone else;
+      # this used to fall through to "no prefix" because the primary-
+      # language branch short-circuited. Now both branches converge:
+      # primary with setting off → prefix.
+      assert UrlResolver.add_public_locale_prefix("/foo", "EN") == "/en/foo"
     end
 
     test "nil and empty stay unchanged" do
       assert UrlResolver.add_public_locale_prefix("/foo", nil) == "/foo"
       assert UrlResolver.add_public_locale_prefix("/foo", "") == "/foo"
+    end
+  end
+
+  describe "add_public_locale_prefix/2 in multilang mode (default_language_no_prefix ON)" do
+    setup do
+      Settings.update_boolean_setting("default_language_no_prefix", true)
+      on_exit(fn -> Settings.update_boolean_setting("default_language_no_prefix", false) end)
+      :ok
+    end
+
+    test "primary language is stripped when setting is ON" do
+      assert UrlResolver.add_public_locale_prefix("/foo", "en") == "/foo"
+    end
+
+    test "primary dialect is stripped when setting is ON (base matches)" do
+      assert UrlResolver.add_public_locale_prefix("/foo", "en-US") == "/foo"
+    end
+
+    test "non-primary still gets the prefix when setting is ON" do
+      assert UrlResolver.add_public_locale_prefix("/foo", "es") == "/es/foo"
+      assert UrlResolver.add_public_locale_prefix("/foo", "fr") == "/fr/foo"
+    end
+  end
+
+  describe "build_path_with_language/3 — sitemap honors the setting" do
+    test "non-primary always emits prefix regardless of setting" do
+      assert UrlResolver.build_path_with_language("/p/widget", "es", false) ==
+               "/es/p/widget"
+    end
+
+    test "primary with setting OFF (default) emits the prefix" do
+      assert UrlResolver.build_path_with_language("/p/widget", "en", true) ==
+               "/en/p/widget"
+    end
+
+    test "primary with setting ON skips the prefix" do
+      Settings.update_boolean_setting("default_language_no_prefix", true)
+      on_exit(fn -> Settings.update_boolean_setting("default_language_no_prefix", false) end)
+
+      assert UrlResolver.build_path_with_language("/p/widget", "en", true) ==
+               "/p/widget"
     end
   end
 end
