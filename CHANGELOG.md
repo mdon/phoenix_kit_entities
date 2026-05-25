@@ -1,3 +1,11 @@
+## 0.2.4 - 2026-05-25
+
+### Fixed
+- `PhoenixKitEntities.Web.Hooks.extract_ip/1` crashed with `Protocol.UndefinedError: protocol String.Chars not implemented for Tuple` on any non-4-tuple peer address — most commonly the IPv4-mapped IPv6 form `::ffff:a.b.c.d` that Docker bridge networks behind a reverse proxy emit. Because `extract_ip/1` runs inside `on_mount`, every entity LiveView entered a mount → crash → reconnect loop, leaving the admin Entities pages reconnecting forever. The address formatter now routes all tuples through `:inet.ntoa/1`, which handles both IPv4 4-tuples and IPv6 8-tuples and maps bad input to `"unknown"` instead of raising. (#17, #18)
+
+### Changed
+- Dependency lockfile bumps: `phoenix_kit` 1.7.116 → 1.7.120, `etcher` 0.4.6 → 0.5.1, `fresco` 0.5.4 → 0.6.3, `ex_doc` 0.40.2 → 0.40.3 (`ex_doc` is docs/dev-only).
+
 ## 0.2.3 - 2026-05-21
 
 ### Added
