@@ -59,9 +59,19 @@ defmodule PhoenixKitEntities.Web.Hooks do
 
   defp extract_ip(socket) do
     case get_connect_info(socket, :peer_data) do
-      %{address: {a, b, c, d}} -> "#{a}.#{b}.#{c}.#{d}"
-      %{address: address} -> to_string(address)
+      %{address: address} when is_tuple(address) -> format_ip(address)
       _ -> "unknown"
+    end
+  end
+
+  @doc false
+  # Exposed for unit tests — handles both IPv4 4-tuples and IPv6 8-tuples
+  # (incl. the IPv4-mapped `::ffff:a.b.c.d` form Docker bridge networks emit).
+  @spec format_ip(:inet.ip_address() | term()) :: String.t()
+  def format_ip(address) do
+    case :inet.ntoa(address) do
+      {:error, _} -> "unknown"
+      chars -> to_string(chars)
     end
   end
 
