@@ -86,9 +86,17 @@ PHOENIX_KIT_PATH=../phoenix_kit mix test     # this module against local core
 ```
 
 The variable name is the dep's app name upper-cased with `_PATH` appended
-(`:phoenix_kit` -> `PHOENIX_KIT_PATH`, `:phoenix_kit_ai` ->
-`PHOENIX_KIT_AI_PATH`). Set several at once to override multiple deps. **Unset = the
-published pin**, so `mix hex.publish` and CI resolve exactly as before.
+(`:phoenix_kit` -> `PHOENIX_KIT_PATH`). Today only `:phoenix_kit` is wrapped;
+wrap a sibling dep in `pk_dep/3` to give it the same `<APP>_PATH` switch.
+A blank or unset value falls back to the published Hex pin, so
+`mix hex.publish` and CI resolve exactly as before.
+
+The override is gated on the env var, not on the repo: `mix.exs` ships in the
+package and `pk_dep/3` reads the var wherever this lib is resolved. Setting
+`PHOENIX_KIT_PATH` therefore also redirects `phoenix_kit` for any downstream
+project that consumes `phoenix_kit_entities` while the var is exported — keep
+it scoped to the shell where you're actually doing cross-repo work.
+
 Implemented via `pk_dep/3` in `mix.exs` — never hand-edit a `phoenix_kit*`
 dep into a `path:` tuple (a committed path dep ships a broken package); set
 the env var instead.

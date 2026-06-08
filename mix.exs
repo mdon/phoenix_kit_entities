@@ -70,11 +70,12 @@ defmodule PhoenixKitEntities.MixProject do
   # mix hex.publish is unaffected.
   defp pk_dep(app, requirement, opts \\ []) do
     env_var = String.upcase(Atom.to_string(app)) <> "_PATH"
+    path = System.get_env(env_var, "") |> String.trim()
 
-    case System.get_env(env_var) do
-      nil when opts == [] -> {app, requirement}
-      nil -> {app, requirement, opts}
-      path -> {app, [path: path, override: true] ++ opts}
+    cond do
+      path != "" -> {app, [path: path, override: true] ++ opts}
+      opts == [] -> {app, requirement}
+      true -> {app, requirement, opts}
     end
   end
 
