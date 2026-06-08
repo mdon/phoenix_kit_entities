@@ -1,3 +1,11 @@
+## 0.2.5 - 2026-06-08
+
+### Added
+- Env-gated path override for `phoenix_kit*` deps: `pk_dep/3` in `mix.exs` swaps the Hex pin for a local `path:` + `override: true` checkout when `<APP>_PATH` is set (e.g. `PHOENIX_KIT_PATH=../phoenix_kit mix test`), for cross-repo development. A blank/unset value falls back to the published pin, so `mix hex.publish` and CI resolve exactly as before. Documented under "Local cross-repo development" in `AGENTS.md`. (#19)
+
+### Changed
+- Dependency lockfile bumps: `phoenix_kit` 1.7.120 → 1.7.133, `etcher` 0.5.1 → 0.6.6, `fresco` 0.6.3 → 0.7.1, `oban` 2.22.1 → 2.23.0, `bandit` 1.11.1 → 1.12.0, `swoosh` 1.25.2 → 1.26.1, `tesla` 1.18.2 → 1.20.0, `req` 0.5.18 → 0.6.1, `igniter` 0.8.0 → 0.8.1, `phoenix_live_view` 1.1.30 → 1.1.31.
+
 ## 0.2.4 - 2026-05-25
 
 ### Fixed
