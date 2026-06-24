@@ -1246,6 +1246,10 @@ defmodule PhoenixKitEntities do
   @spec route_module() :: module()
   def route_module, do: PhoenixKitEntities.Routes
 
+  @impl PhoenixKit.Module
+  @spec sitemap_sources() :: [module()]
+  def sitemap_sources, do: [PhoenixKitEntities.SitemapSource]
+
   # ============================================================================
   # Sort Mode Settings
   # ============================================================================
