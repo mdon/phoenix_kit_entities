@@ -65,7 +65,18 @@ defmodule PhoenixKitEntities.SitemapSource do
 
   ## Exclusion
 
-  Records can be excluded by setting `record.metadata["sitemap_exclude"] = true`.
+  Two levels of opt-out:
+
+  - **Per entity**: set `entity.settings["sitemap_exclude"] = true` to keep an
+    entire entity out of the sitemap regardless of its routes or the
+    `sitemap_entities_auto_pattern` flag. Use this for internal / form entities
+    (e.g. `contact_request`) whose records default to status `"published"` and
+    are not meant for public indexing.
+  - **Per record**: set `record.metadata["sitemap_exclude"] = true`.
+
+  Note: only an entity with a genuinely public route or configured URL pattern
+  is eligible in the first place — internal entities with no public URL are
+  excluded automatically. The per-entity flag is the explicit, defensive opt-out.
 
   ## Sitemap Properties
 
@@ -86,6 +97,7 @@ defmodule PhoenixKitEntities.SitemapSource do
 
   require Logger
 
+  alias PhoenixKit.Modules.Languages
   alias PhoenixKit.Modules.Sitemap.RouteResolver
   alias PhoenixKit.Modules.Sitemap.UrlEntry
   alias PhoenixKit.Settings
@@ -109,7 +121,12 @@ defmodule PhoenixKitEntities.SitemapSource do
   def sub_sitemaps(opts) do
     is_default = Keyword.get(opts, :is_default_language, true)
 
-    if enabled?() and is_default do
+    # Runs once per enabled language (the Generator iterates languages and
+    # calls this with `language` + `is_default_language`). Localized URLs are
+    # emitted only for records that actually have a translation in that locale
+    # (see `record_has_translation?/2`), so non-default languages no longer
+    # short-circuit here. Honors the `sitemap_include_entities` admin toggle.
+    if enabled?() and include_entities?() do
       base_url = Keyword.get(opts, :base_url)
       language = Keyword.get(opts, :language)
       include_index = Settings.get_boolean_setting("sitemap_entities_include_index", true)
@@ -120,7 +137,7 @@ defmodule PhoenixKitEntities.SitemapSource do
 
       sub_maps =
         PhoenixKitEntities.list_active_entities()
-        |> Enum.filter(&entity_has_public_route?(&1, routes_cache))
+        |> Enum.filter(&entity_sitemap_eligible?(&1, routes_cache))
         |> Enum.map(fn entity ->
           entries =
             collect_entity_entries(
@@ -128,7 +145,9 @@ defmodule PhoenixKitEntities.SitemapSource do
               base_url,
               include_index,
               locale_prefix,
-              routes_cache
+              routes_cache,
+              language,
+              is_default
             )
 
           {entity.name, entries}
@@ -164,11 +183,10 @@ defmodule PhoenixKitEntities.SitemapSource do
   @impl true
   @spec collect(keyword()) :: [PhoenixKit.Modules.Sitemap.UrlEntry.t()]
   def collect(opts \\ []) do
-    is_default = Keyword.get(opts, :is_default_language, true)
-
-    # Entities only generate URLs for the default language
-    # Non-default language URLs would lead to 404 errors
-    if enabled?() and is_default do
+    # Runs once per enabled language. Localized entity URLs are emitted only
+    # when the record has a translation for that locale (avoiding 404s), so we
+    # no longer gate on the default language. Honors the admin toggle.
+    if enabled?() and include_entities?() do
       do_collect(opts)
     else
       []
@@ -198,10 +216,39 @@ defmodule PhoenixKitEntities.SitemapSource do
       []
     else
       PhoenixKitEntities.list_active_entities()
-      |> Enum.filter(&entity_has_public_route?(&1, routes_cache))
+      |> Enum.filter(&entity_sitemap_eligible?(&1, routes_cache))
       |> Enum.flat_map(
-        &collect_entity_entries(&1, base_url, include_index, locale_prefix, routes_cache)
+        &collect_entity_entries(
+          &1,
+          base_url,
+          include_index,
+          locale_prefix,
+          routes_cache,
+          language,
+          is_default
+        )
       )
+    end
+  end
+
+  # An entity is eligible for the sitemap only when it is NOT explicitly
+  # excluded AND has a genuinely public route/pattern. The exclude check is the
+  # authoritative opt-out for internal/form entities (e.g. `contact_request`):
+  # records there default to status "published", so the status filter alone does
+  # NOT keep them out — and if `sitemap_entities_auto_pattern` is ever enabled,
+  # every entity would otherwise become eligible via the fallback pattern. Set
+  # `entity.settings["sitemap_exclude"] = true` to guarantee an entity is never
+  # indexed regardless of routes or the auto-pattern flag.
+  defp entity_sitemap_eligible?(entity, routes_cache) do
+    not entity_excluded?(entity) and entity_has_public_route?(entity, routes_cache)
+  end
+
+  # Per-entity opt-out (mirrors the per-record `sitemap_exclude` metadata flag).
+  defp entity_excluded?(entity) do
+    case entity.settings do
+      %{"sitemap_exclude" => true} -> true
+      %{"sitemap_exclude" => "true"} -> true
+      _ -> false
     end
   end
 
@@ -230,29 +277,61 @@ defmodule PhoenixKitEntities.SitemapSource do
     has_explicit_route or has_catchall_route or has_settings_pattern or auto_pattern_enabled
   end
 
-  defp collect_entity_entries(entity, base_url, include_index, locale_prefix, routes_cache) do
-    records = collect_entity_records(entity, base_url, locale_prefix, routes_cache)
+  defp collect_entity_entries(
+         entity,
+         base_url,
+         include_index,
+         locale_prefix,
+         routes_cache,
+         language,
+         is_default
+       ) do
+    records =
+      collect_entity_records(entity, base_url, locale_prefix, routes_cache, language, is_default)
 
     if include_index do
-      prepend_index_entry(records, entity, base_url, locale_prefix, routes_cache)
+      prepend_index_entry(
+        records,
+        entity,
+        base_url,
+        locale_prefix,
+        routes_cache,
+        is_default
+      )
     else
       records
     end
   end
 
-  defp prepend_index_entry(records, entity, base_url, locale_prefix, routes_cache) do
-    case collect_entity_index(entity, base_url, locale_prefix, routes_cache) do
-      nil -> records
-      index_entry -> [index_entry | records]
+  # For the default language, always consider the index page. For a non-default
+  # language, only emit the localized index when the entity has at least one
+  # record resolvable in that locale — `records` is already filtered by
+  # translation presence, so a non-empty list means the localized listing
+  # has content and should resolve.
+  defp prepend_index_entry(records, entity, base_url, locale_prefix, routes_cache, is_default) do
+    if not is_default and records == [] do
+      records
+    else
+      case collect_entity_index(entity, base_url, locale_prefix, routes_cache) do
+        nil -> records
+        index_entry -> [index_entry | records]
+      end
     end
   end
 
-  defp collect_entity_records(entity, base_url, locale_prefix, routes_cache) do
+  defp collect_entity_records(entity, base_url, locale_prefix, routes_cache, language, is_default) do
     if entity_requires_auth_cached?(entity, routes_cache) do
       Logger.debug("Sitemap: Entity '#{entity.name}' skipped - routes require authentication")
       []
     else
-      do_collect_entity_records(entity, base_url, locale_prefix, routes_cache)
+      do_collect_entity_records(
+        entity,
+        base_url,
+        locale_prefix,
+        routes_cache,
+        language,
+        is_default
+      )
     end
   rescue
     error ->
@@ -260,7 +339,14 @@ defmodule PhoenixKitEntities.SitemapSource do
       []
   end
 
-  defp do_collect_entity_records(entity, base_url, locale_prefix, routes_cache) do
+  defp do_collect_entity_records(
+         entity,
+         base_url,
+         locale_prefix,
+         routes_cache,
+         language,
+         is_default
+       ) do
     url_pattern = UrlResolver.get_url_pattern_cached(entity, routes_cache)
     effective_pattern = url_pattern || get_fallback_pattern(entity)
 
@@ -270,6 +356,10 @@ defmodule PhoenixKitEntities.SitemapSource do
 
       records
       |> Enum.reject(&excluded?/1)
+      # Per-record translation guard: for a non-default language, keep only
+      # records that actually have a translation in that locale, so we never
+      # emit a localized URL that 404s. The default language always emits.
+      |> Enum.filter(fn record -> is_default or record_has_translation?(record, language) end)
       |> Enum.map(fn record ->
         build_entry(record, entity, effective_pattern, base_url, locale_prefix)
       end)
@@ -312,6 +402,8 @@ defmodule PhoenixKitEntities.SitemapSource do
     if index_path do
       # Canonical path without language prefix (for hreflang grouping)
       canonical_path = index_path
+      # Trust the locale prefix (site policy via emit_prefix?/2), consistent
+      # with the per-record entries and every other sitemap source.
       path = locale_prefix <> index_path
       url = UrlResolver.build_url(path, base_url)
 
@@ -375,6 +467,11 @@ defmodule PhoenixKitEntities.SitemapSource do
   defp build_entry(record, entity, url_pattern, base_url, locale_prefix) do
     # Canonical path without language prefix (for hreflang grouping)
     canonical_path = UrlResolver.build_path(url_pattern, record)
+    # The locale prefix already encodes the site's policy via
+    # `UrlResolver.locale_prefix/2` -> `LocalePath.emit_prefix?/2` (e.g. empty
+    # for the default language when `default_language_no_prefix?` is set). Trust
+    # it, consistent with every other sitemap source — do not special-case the
+    # default language here.
     path = locale_prefix <> canonical_path
     url = UrlResolver.build_url(path, base_url)
 
@@ -389,4 +486,38 @@ defmodule PhoenixKitEntities.SitemapSource do
       canonical_path: canonical_path
     })
   end
+
+  # Honors the core `sitemap_include_entities` admin toggle (default true).
+  # Falls open so a settings/DB hiccup doesn't silently drop entity URLs.
+  defp include_entities? do
+    PhoenixKit.Modules.Sitemap.include_entities?()
+  rescue
+    _ -> true
+  end
+
+  # True when `record` has a translation for `language` (the base locale code
+  # the Generator passes, e.g. "fr"). `record.data` is keyed by locale —
+  # a mix of base ("it", "pl") and dialect ("fr-FR", "de-DE") codes — so we
+  # normalize both sides to the base code before comparing. The `_primary_language`
+  # bookkeeping key is ignored.
+  defp record_has_translation?(_record, nil), do: true
+
+  defp record_has_translation?(record, language) when is_binary(language) do
+    base = Languages.DialectMapper.extract_base(language)
+
+    case record.data do
+      %{} = data ->
+        data
+        |> Map.keys()
+        |> Enum.reject(&(&1 == "_primary_language"))
+        |> Enum.any?(fn key ->
+          is_binary(key) and Languages.DialectMapper.extract_base(key) == base
+        end)
+
+      _ ->
+        false
+    end
+  end
+
+  defp record_has_translation?(_record, _language), do: false
 end
