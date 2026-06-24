@@ -616,26 +616,36 @@ Max handles release cuts personally. Don't auto-bump.
 
 ### Version locations
 
-When bumping, the version must be updated in **three places**:
+The **package version** lives in **one** place — `@version` in `mix.exs`. It
+drives the Hex release, the `CHANGELOG.md` heading, the git tag, and `source_ref`
+for the docs. Bumping it (plus the CHANGELOG entry and tag) is the whole release.
 
-1. `mix.exs` — `@version` module attribute
-2. `lib/phoenix_kit_entities.ex` — `def version, do: "x.y.z"`
-3. `test/phoenix_kit_entities_test.exs` — version compliance test
+`lib/phoenix_kit_entities.ex`'s `def version/0` is the `PhoenixKit.Module`
+behaviour callback, **not** the package version. It is versioned independently
+(currently `"0.1.4"`) and is intentionally not bumped on every release. The only
+test that touches it — `test/phoenix_kit_entities/context_extras_test.exs` —
+asserts `is_binary(Entities.version())`, not a specific value, so a package bump
+does not require changing it or any test. (`phoenix_kit_entities_test.exs` does
+not assert the version.)
 
 ### Tagging & GitHub releases
 
-Tags use **bare version numbers** (no `v` prefix):
+Tags use a **`v` prefix** (e.g. `v0.2.6`), matching `source_ref: "v#{@version}"`
+in `mix.exs` and every recent release (`v0.2.1`, `v0.2.3`, `v0.2.4`, `v0.2.6`).
+Only a handful of the earliest tags are bare (`0.1.0`, `0.1.4`); new tags follow
+the `v` form.
 
 ```bash
-git tag 0.1.0
-git push origin 0.1.0
-gh release create 0.1.0 \
-  --title "0.1.0 - 2026-03-24" \
+git tag -a v0.2.6 -m "Release 0.2.6"
+git push origin v0.2.6
+gh release create v0.2.6 \
+  --title "0.2.6 - 2026-06-24" \
   --notes "$(changelog body for this version)"
 ```
 
-Never tag or release before all changes are committed and pushed —
-tags are immutable pointers.
+Order matters: commit → push → `mix hex.publish` → **only then** tag. Never tag
+before a successful publish or before all changes are committed and pushed — tags
+are immutable pointers.
 
 ## Pull Requests
 
