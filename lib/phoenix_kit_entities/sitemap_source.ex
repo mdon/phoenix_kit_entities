@@ -303,8 +303,7 @@ defmodule PhoenixKitEntities.SitemapSource do
     end
   end
 
-  # For the default language, always consider the index page (emitted
-  # unprefixed via Fix #1 in `collect_entity_index/5`). For a non-default
+  # For the default language, always consider the index page. For a non-default
   # language, only emit the localized index when the entity has at least one
   # record resolvable in that locale — `records` is already filtered by
   # translation presence, so a non-empty list means the localized listing
@@ -313,7 +312,7 @@ defmodule PhoenixKitEntities.SitemapSource do
     if not is_default and records == [] do
       records
     else
-      case collect_entity_index(entity, base_url, locale_prefix, routes_cache, is_default) do
+      case collect_entity_index(entity, base_url, locale_prefix, routes_cache) do
         nil -> records
         index_entry -> [index_entry | records]
       end
@@ -362,7 +361,7 @@ defmodule PhoenixKitEntities.SitemapSource do
       # emit a localized URL that 404s. The default language always emits.
       |> Enum.filter(fn record -> is_default or record_has_translation?(record, language) end)
       |> Enum.map(fn record ->
-        build_entry(record, entity, effective_pattern, base_url, locale_prefix, is_default)
+        build_entry(record, entity, effective_pattern, base_url, locale_prefix)
       end)
     else
       Logger.warning(
@@ -397,16 +396,15 @@ defmodule PhoenixKitEntities.SitemapSource do
   end
 
   # Collect index page entry for entity (e.g., /page, /products) - cached version
-  defp collect_entity_index(entity, base_url, locale_prefix, routes_cache, is_default) do
+  defp collect_entity_index(entity, base_url, locale_prefix, routes_cache) do
     index_path = UrlResolver.get_index_path_cached(entity, routes_cache)
 
     if index_path do
       # Canonical path without language prefix (for hreflang grouping)
       canonical_path = index_path
-      # Fix #1: the default language is served unprefixed (the prefixed form
-      # 301-redirects to the canonical), so force an empty prefix for it.
-      effective_prefix = if is_default, do: "", else: locale_prefix
-      path = effective_prefix <> index_path
+      # Trust the locale prefix (site policy via emit_prefix?/2), consistent
+      # with the per-record entries and every other sitemap source.
+      path = locale_prefix <> index_path
       url = UrlResolver.build_url(path, base_url)
 
       UrlEntry.new(%{
@@ -466,13 +464,15 @@ defmodule PhoenixKitEntities.SitemapSource do
     end
   end
 
-  defp build_entry(record, entity, url_pattern, base_url, locale_prefix, is_default) do
+  defp build_entry(record, entity, url_pattern, base_url, locale_prefix) do
     # Canonical path without language prefix (for hreflang grouping)
     canonical_path = UrlResolver.build_path(url_pattern, record)
-    # Fix #1: the default language is served unprefixed (the prefixed form
-    # 301-redirects to the canonical), so force an empty prefix for it.
-    effective_prefix = if is_default, do: "", else: locale_prefix
-    path = effective_prefix <> canonical_path
+    # The locale prefix already encodes the site's policy via
+    # `UrlResolver.locale_prefix/2` -> `LocalePath.emit_prefix?/2` (e.g. empty
+    # for the default language when `default_language_no_prefix?` is set). Trust
+    # it, consistent with every other sitemap source — do not special-case the
+    # default language here.
+    path = locale_prefix <> canonical_path
     url = UrlResolver.build_url(path, base_url)
 
     UrlEntry.new(%{

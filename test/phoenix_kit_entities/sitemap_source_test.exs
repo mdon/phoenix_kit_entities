@@ -99,8 +99,22 @@ defmodule PhoenixKitEntities.SitemapSourceTest do
   end
 
   describe "collect/1" do
-    test "returns [] when not the default language" do
-      assert SitemapSource.collect(is_default_language: false) == []
+    test "non-default language emits records only where a per-locale translation exists", ctx do
+      Settings.update_setting("sitemap_entities_auto_pattern", "true")
+
+      # The seeded records are field-keyed (no per-locale translations), so a
+      # non-default locale has no translation and must yield no entries.
+      fr =
+        SitemapSource.collect(
+          base_url: "https://example.test",
+          is_default_language: false,
+          language: "fr"
+        )
+
+      ours =
+        Enum.filter(fr, fn e -> e.category in [ctx.entity.display_name, ctx.entity.name] end)
+
+      assert ours == []
     end
 
     test "returns [] when entities_enabled is off" do
@@ -141,6 +155,41 @@ defmodule PhoenixKitEntities.SitemapSourceTest do
       refute Enum.any?(ours, fn e -> String.contains?(e.loc, "/draft") end)
     end
 
+    test "entity-level sitemap_exclude omits the entity entirely", ctx do
+      Settings.update_setting("sitemap_entities_auto_pattern", "true")
+
+      {:ok, internal} =
+        Entities.create_entity(
+          %{
+            name: "internal_form",
+            display_name: "Internal Form",
+            fields_definition: [%{"type" => "text", "key" => "title", "label" => "Title"}],
+            settings: %{"sitemap_exclude" => true},
+            created_by_uuid: ctx.actor_uuid
+          },
+          actor_uuid: ctx.actor_uuid
+        )
+
+      {:ok, _} =
+        EntityData.create(
+          %{
+            entity_uuid: internal.uuid,
+            title: "Secret",
+            slug: "secret-internal",
+            status: "published",
+            data: %{"title" => "Secret"},
+            created_by_uuid: ctx.actor_uuid
+          },
+          actor_uuid: ctx.actor_uuid
+        )
+
+      result = SitemapSource.collect(base_url: "https://example.test", is_default_language: true)
+
+      # The excluded entity's record must never appear, even though it is
+      # published and auto_pattern would otherwise make it eligible.
+      refute Enum.any?(result, fn e -> String.contains?(e.loc, "secret-internal") end)
+    end
+
     test "with auto_pattern on but include_index off, no index entries", ctx do
       Settings.update_setting("sitemap_entities_auto_pattern", "true")
       Settings.update_setting("sitemap_entities_include_index", "false")
@@ -159,8 +208,16 @@ defmodule PhoenixKitEntities.SitemapSourceTest do
   end
 
   describe "sub_sitemaps/1" do
-    test "returns nil when not the default language" do
-      assert SitemapSource.sub_sitemaps(is_default_language: false) == nil
+    test "non-default language yields nil when no entity has a translated record" do
+      Settings.update_setting("sitemap_entities_auto_pattern", "true")
+
+      # Seeded records are field-keyed (no per-locale translations) → no fr
+      # entries → all groups empty → nil.
+      assert SitemapSource.sub_sitemaps(
+               base_url: "https://example.test",
+               is_default_language: false,
+               language: "fr"
+             ) == nil
     end
 
     test "returns nil when entities_enabled is off" do
