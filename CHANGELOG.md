@@ -1,3 +1,16 @@
+## 0.2.6 - 2026-06-24
+
+### Added
+- Entities sitemap source is now auto-registered with core via the `PhoenixKit.Module` `sitemap_sources/0` callback (`PhoenixKitEntities.sitemap_sources/0` returns `[PhoenixKitEntities.SitemapSource]`), so host apps pick it up with zero config. (#20)
+- Per-language sitemap output: `SitemapSource.collect/1` and `sub_sitemaps/1` no longer short-circuit on the default language. They run once per enabled language and emit a localized URL for a record only when that record actually carries a translation for the locale, avoiding 404 entries. Gated on the core `sitemap_include_entities` admin toggle. (#20)
+- Per-entity sitemap opt-out: set `entity.settings["sitemap_exclude"] = true` to keep an entire entity out of the sitemap regardless of routes or `sitemap_entities_auto_pattern` (mirrors the existing per-record `metadata["sitemap_exclude"]` flag). The authoritative defense for internal/form entities whose records default to status `"published"`. (#20)
+
+### Fixed
+- Sitemap per-locale translation guard no longer mistakes a flat record's field key for a locale code. Only multilang records are locale-keyed; a flat record's `data` is keyed by field names, so a field named like a base locale (e.g. `"id"` → Indonesian, `"no"` → Norwegian) was falsely counted as a translation and emitted a localized URL that 404s. `record_has_translation?/2` now gates on `Multilang.multilang_data?/1`. (#20 follow-up)
+
+### Changed
+- Dependency lockfile bumps: `phoenix_kit` 1.7.133 → 1.7.165, `phoenix` 1.8.7 → 1.8.8, `phoenix_live_view` 1.1.31 → 1.2.3, `plug` 1.19.2 → 1.20.1, `req` 0.6.1 → 0.6.2, `finch` 0.22.0 → 0.23.0, `igniter` 0.8.1 → 0.8.2, `sourceror` 1.12.0 → 1.12.2, `tessera` 0.2.1 → 0.3.1, `leaf` 0.2.21 → 0.3.0 (now backed by `mdex` instead of `earmark`). Removed the resulting orphaned top-level `earmark` lock entry.
+
 ## 0.2.5 - 2026-06-08
 
 ### Added
