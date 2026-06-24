@@ -98,9 +98,11 @@ defmodule PhoenixKitEntities.SitemapSource do
   require Logger
 
   alias PhoenixKit.Modules.Languages
+  alias PhoenixKit.Modules.Sitemap
   alias PhoenixKit.Modules.Sitemap.RouteResolver
   alias PhoenixKit.Modules.Sitemap.UrlEntry
   alias PhoenixKit.Settings
+  alias PhoenixKit.Utils.Multilang
   alias PhoenixKitEntities.EntityData
   alias PhoenixKitEntities.UrlResolver
 
@@ -490,34 +492,43 @@ defmodule PhoenixKitEntities.SitemapSource do
   # Honors the core `sitemap_include_entities` admin toggle (default true).
   # Falls open so a settings/DB hiccup doesn't silently drop entity URLs.
   defp include_entities? do
-    PhoenixKit.Modules.Sitemap.include_entities?()
+    Sitemap.include_entities?()
   rescue
     _ -> true
   end
 
-  # True when `record` has a translation for `language` (the base locale code
-  # the Generator passes, e.g. "fr"). `record.data` is keyed by locale —
-  # a mix of base ("it", "pl") and dialect ("fr-FR", "de-DE") codes — so we
-  # normalize both sides to the base code before comparing. The `_primary_language`
-  # bookkeeping key is ignored.
+  # True when `record` is a multilang record carrying an explicit translation
+  # for `language` (the base locale code the Generator passes, e.g. "fr").
+  #
+  # Only a *multilang* record is keyed by locale at the top level
+  # (`%{"_primary_language" => ..., "en-US" => %{...}, "fr-FR" => %{...}}`). A
+  # *flat* record's `data` is keyed by FIELD names, so we must NOT read its keys
+  # as locale codes: a field literally named like a base locale (e.g. "id" ->
+  # Indonesian, "no" -> Norwegian, "it" -> Italian) would otherwise masquerade
+  # as a translation and emit a localized URL that 404s — the very thing this
+  # guard exists to prevent. Flat records exist only in the primary language, so
+  # they never have a secondary-language translation. Gating on
+  # `Multilang.multilang_data?/1` (presence of the `_primary_language` sentinel)
+  # cleanly separates the two shapes. Both the requested language and the stored
+  # locale keys are normalized to their base code before comparing.
   defp record_has_translation?(_record, nil), do: true
 
   defp record_has_translation?(record, language) when is_binary(language) do
-    base = Languages.DialectMapper.extract_base(language)
+    data = record.data
 
-    case record.data do
-      %{} = data ->
-        data
-        |> Map.keys()
-        |> Enum.reject(&(&1 == "_primary_language"))
-        |> Enum.any?(fn key ->
-          is_binary(key) and Languages.DialectMapper.extract_base(key) == base
-        end)
+    if Multilang.multilang_data?(data) do
+      base = Languages.DialectMapper.extract_base(language)
 
-      _ ->
-        false
+      data
+      |> Map.keys()
+      |> Enum.any?(fn key ->
+        key != "_primary_language" and is_binary(key) and
+          Languages.DialectMapper.extract_base(key) == base
+      end)
+    else
+      # Flat record (`data` is nil or field-keyed) — no secondary-language
+      # translation. `Multilang.multilang_data?/1` already returns false for nil.
+      false
     end
   end
-
-  defp record_has_translation?(_record, _language), do: false
 end

@@ -117,6 +117,85 @@ defmodule PhoenixKitEntities.SitemapSourceTest do
       assert ours == []
     end
 
+    test "non-default language emits a record that has a real per-locale translation", ctx do
+      Settings.update_setting("sitemap_entities_auto_pattern", "true")
+
+      {:ok, _translated} =
+        EntityData.create(
+          %{
+            entity_uuid: ctx.entity.uuid,
+            title: "Bonjour",
+            slug: "translated-fr",
+            status: "published",
+            # Genuine multilang record: top-level keys are locale codes.
+            data: %{
+              "_primary_language" => "en-US",
+              "en-US" => %{"title" => "Hello"},
+              "fr-FR" => %{"title" => "Bonjour"}
+            },
+            created_by_uuid: ctx.actor_uuid
+          },
+          actor_uuid: ctx.actor_uuid
+        )
+
+      fr =
+        SitemapSource.collect(
+          base_url: "https://example.test",
+          is_default_language: false,
+          language: "fr"
+        )
+
+      # The fr-FR translation exists -> the record is emitted for "fr". The
+      # field-keyed seed records (e.g. "first") have no fr translation and stay out.
+      assert Enum.any?(fr, fn e -> String.contains?(e.loc, "translated-fr") end)
+      refute Enum.any?(fr, fn e -> String.contains?(e.loc, "/first") end)
+    end
+
+    test "flat record with a locale-colliding field key is not emitted for that language", ctx do
+      Settings.update_setting("sitemap_entities_auto_pattern", "true")
+
+      # An ordinary entity whose field key "id" happens to equal the Indonesian
+      # base locale code. A flat record's `data` is keyed by field names, so the
+      # "id" field must never be mistaken for an "id" (Indonesian) translation.
+      {:ok, entity} =
+        Entities.create_entity(
+          %{
+            name: "collide_entity",
+            display_name: "Collide Entity",
+            fields_definition: [
+              %{"type" => "text", "key" => "title", "label" => "Title"},
+              %{"type" => "text", "key" => "id", "label" => "External ID"}
+            ],
+            created_by_uuid: ctx.actor_uuid
+          },
+          actor_uuid: ctx.actor_uuid
+        )
+
+      {:ok, _} =
+        EntityData.create(
+          %{
+            entity_uuid: entity.uuid,
+            title: "Has Id Field",
+            slug: "id-collision",
+            status: "published",
+            data: %{"title" => "Has Id Field", "id" => "EXT-42"},
+            created_by_uuid: ctx.actor_uuid
+          },
+          actor_uuid: ctx.actor_uuid
+        )
+
+      result =
+        SitemapSource.collect(
+          base_url: "https://example.test",
+          is_default_language: false,
+          language: "id"
+        )
+
+      # No real Indonesian translation exists, so the record must not produce a
+      # localized URL — the "id" field is not an "id" locale.
+      refute Enum.any?(result, fn e -> String.contains?(e.loc, "id-collision") end)
+    end
+
     test "returns [] when entities_enabled is off" do
       Settings.update_setting("entities_enabled", "false")
       assert SitemapSource.collect([]) == []
