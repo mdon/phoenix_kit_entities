@@ -86,6 +86,41 @@ defmodule PhoenixKitEntities.SitemapSourceTest do
     end
   end
 
+  describe "sitemap_settings_schema/0" do
+    test "returns the fixed schema shape with defaults matching what the source reads at runtime" do
+      schema = SitemapSource.sitemap_settings_schema()
+
+      assert is_list(schema)
+      assert length(schema) == 3
+
+      for entry <- schema do
+        assert %{key: key, type: type, label: label, help: help, default: _} = entry
+        assert is_binary(key)
+        assert type in [:boolean, :string, :integer]
+        assert is_binary(label) and label != ""
+        assert is_binary(help) and help != ""
+      end
+
+      by_key = Map.new(schema, &{&1.key, &1})
+
+      # `sitemap_entities_include_index` -- read via
+      # `Settings.get_boolean_setting("sitemap_entities_include_index", true)`
+      # in both `do_collect/1` and `sub_sitemaps/1`.
+      assert %{type: :boolean, default: true} = by_key["sitemap_entities_include_index"]
+
+      # `sitemap_entities_auto_pattern` -- read via
+      # `Settings.get_boolean_setting("sitemap_entities_auto_pattern", false)`
+      # in `do_collect/1`, `get_fallback_pattern/1`, and `UrlResolver`.
+      assert %{type: :boolean, default: false} = by_key["sitemap_entities_auto_pattern"]
+
+      # `sitemap_entities_pattern` -- read via the no-default
+      # `Settings.get_setting/1` in `UrlResolver.get_global_pattern/1`, which
+      # returns `nil` (i.e. "no global pattern") when unset; the schema's ""
+      # default represents that same "unset" state for a string field.
+      assert %{type: :string, default: ""} = by_key["sitemap_entities_pattern"]
+    end
+  end
+
   describe "enabled?/0" do
     test "true when entities_enabled is set" do
       Settings.update_setting("entities_enabled", "true")

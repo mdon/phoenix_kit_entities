@@ -57,11 +57,18 @@ defmodule PhoenixKitEntities.SitemapSource do
 
   ## Configuration
 
-  - `sitemap_entities_auto_pattern` - Enable auto URL pattern generation (default: false)
-  - `sitemap_entities_include_index` - Include entity index pages (default: true)
-  - `sitemap_entity_{name}_pattern` - Per-entity URL pattern override
-  - `sitemap_entity_{name}_index_path` - Per-entity index page path override
-  - `sitemap_entities_pattern` - Global pattern template (e.g., "/:entity_name/:slug")
+  Settings marked *(Admin UI)* are exposed to the core Sitemap admin screen
+  via `sitemap_settings_schema/0` — on phoenix_kit releases that render
+  source-provided settings schemas, they can be edited there instead of only
+  through `PhoenixKit.Settings`. On older phoenix_kit releases (or if this
+  package predates the schema being added), every setting below still works
+  exactly as before: console/Settings only.
+
+  - `sitemap_entities_auto_pattern` - Enable auto URL pattern generation (default: false) *(Admin UI)*
+  - `sitemap_entities_include_index` - Include entity index pages (default: true) *(Admin UI)*
+  - `sitemap_entities_pattern` - Global pattern template (e.g., "/:entity_name/:slug") (default: none) *(Admin UI)*
+  - `sitemap_entity_{name}_pattern` - Per-entity URL pattern override (console/Settings only)
+  - `sitemap_entity_{name}_index_path` - Per-entity index page path override (console/Settings only)
 
   ## Exclusion
 
@@ -113,6 +120,72 @@ defmodule PhoenixKitEntities.SitemapSource do
   @impl true
   @spec sitemap_filename() :: String.t()
   def sitemap_filename, do: "sitemap-entities"
+
+  @doc """
+  Returns the admin-UI settings schema for this source, so entities-specific
+  sitemap settings can be edited from the core Sitemap admin screen instead
+  of only via `PhoenixKit.Settings` from the console/IEx.
+
+  Optional callback: the core Sitemap admin only calls this when
+  `function_exported?(__MODULE__, :sitemap_settings_schema, 0)` is true, so
+  this ships safely against phoenix_kit releases that predate schema-based
+  settings rendering — they simply never call it, and every setting below
+  keeps working exactly as it does today (console/Settings only).
+
+  Per-entity overrides (`sitemap_entity_{name}_pattern`,
+  `sitemap_entity_{name}_index_path`) are intentionally NOT included here:
+  they're keyed by entity name rather than being a fixed set, so they remain
+  console/Settings-only regardless of admin-UI schema support.
+  """
+  @spec sitemap_settings_schema() :: [
+          %{
+            key: String.t(),
+            type: :boolean | :string | :integer,
+            label: String.t(),
+            help: String.t() | nil,
+            default: term()
+          }
+        ]
+  def sitemap_settings_schema do
+    [
+      %{
+        key: "sitemap_entities_include_index",
+        type: :boolean,
+        label: "Include entity index pages",
+        help:
+          "Emit index/list pages (e.g. /page, /products) alongside individual entity " <>
+            "records. Defaults to on. Before this schema existed, flipping it required a " <>
+            "direct Settings/SQL update -- e.g. hydroforce.ee had to be switched this way " <>
+            "before its entity index pages showed up in the sitemap.",
+        default: true
+      },
+      %{
+        key: "sitemap_entities_auto_pattern",
+        type: :boolean,
+        label: "Auto-generate URLs for unrouted entities",
+        help:
+          "When an entity has no router match, no entity-settings override, and no " <>
+            "per-entity pattern, fall back to \"/:entity_name/:slug\" for records and " <>
+            "\"/:entity_name\" for its index page. This applies to every published " <>
+            "entity, including internal/form entities never meant to be public -- use the " <>
+            "per-entity `sitemap_exclude` setting to keep those out. Off by default; only " <>
+            "enable once you've confirmed the fallback URL is actually routable.",
+        default: false
+      },
+      %{
+        key: "sitemap_entities_pattern",
+        type: :string,
+        label: "Global URL pattern",
+        help:
+          "Template applied to entities with no router match and no per-entity " <>
+            "override, e.g. \"/:entity_name/:slug\". Leave blank to rely on router " <>
+            "introspection or per-entity overrides instead. Per-entity overrides " <>
+            "(`sitemap_entity_{name}_pattern`) take precedence over this and remain " <>
+            "console/Settings-only.",
+        default: ""
+      }
+    ]
+  end
 
   @doc """
   Returns per-entity-type sub-sitemaps.
