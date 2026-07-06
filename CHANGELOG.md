@@ -1,3 +1,16 @@
+## 0.2.7 - 2026-07-06
+
+### Added
+- `PhoenixKitEntities.SitemapSource.sitemap_settings_schema/0` — optional `Source` behaviour callback that declares the entities source's fixed global sitemap settings (`sitemap_entities_include_index`, `sitemap_entities_auto_pattern`, `sitemap_entities_pattern`) so the core Sitemap admin screen can render editors for them instead of requiring console/`PhoenixKit.Settings` edits. Per-entity, name-keyed overrides (`sitemap_entity_{name}_pattern`, `sitemap_entity_{name}_index_path`) stay console-only by design. Core gates the call behind `function_exported?/3`, so it is inert on phoenix_kit releases that predate the schema-rendering UI. (#21)
+
+### Fixed
+- `sitemap_settings_schema/0` is now annotated `@impl true`. The pinned `phoenix_kit` (1.7.x) declares it as an optional `Source` callback, so the missing annotation tripped the compiler's `@impl` consistency check and broke `mix compile --warnings-as-errors` (i.e. `mix precommit`). (#21 follow-up)
+- `UrlResolver.get_global_pattern/1` now treats a blank `sitemap_entities_pattern` as unset, mirroring the per-entity `sitemap_url_pattern` guard. The new settings schema declares `""` as this setting's default, so a blank admin value can be persisted; without the guard an empty global pattern resolved to `""` and collapsed every eligible entity record URL to the site root. (#21 follow-up)
+
+### Changed
+- Corrected the `SitemapSource` moduledoc: `sitemap_entities_auto_pattern` defaults to `false` (it was documented as enabled-by-default, contradicting the code and the new schema). The wrong default is security-relevant — auto-pattern makes every published entity, including internal/form entities, sitemap-eligible via the `/:entity_name/:slug` fallback. Also removed a customer-specific domain from the admin help text. (#21 follow-up)
+- Dependency lockfile bumps: `phoenix_kit` 1.7.165 → 1.7.175, `phoenix_live_view` 1.2.3 → 1.2.5, `plug` 1.20.1 → 1.20.2, `swoosh` 1.26.1 → 1.26.3, `etcher` 0.6.6 → 0.7.1, `mdex` 0.13.1 → 0.13.3, `mdex_native` 0.2.2 → 0.2.4, `mint` 1.9.0 → 1.9.1, `db_connection` 2.10.1 → 2.10.2, `hpax` 1.0.3 → 1.0.4, `makeup` 1.2.1 → 1.2.2, `ex_ast` 0.12.0 → 0.12.7.
+
 ## 0.2.6 - 2026-06-24
 
 ### Added
