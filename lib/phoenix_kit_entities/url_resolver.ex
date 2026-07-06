@@ -180,10 +180,19 @@ defmodule PhoenixKitEntities.UrlResolver do
     end
   end
 
+  # An empty string is treated as "unset" — same convention as the per-entity
+  # `sitemap_url_pattern` guard in `get_pattern_from_entity_settings/1`. This
+  # matters because the admin-UI schema (`SitemapSource.sitemap_settings_schema/0`)
+  # declares `""` as this setting's default, so a blank value can be persisted;
+  # without this guard an empty global pattern would resolve to `""` and collapse
+  # every eligible record URL to the site root.
   defp get_global_pattern(entity) do
     case safe_get_setting("sitemap_entities_pattern") do
-      nil -> nil
-      global_pattern -> String.replace(global_pattern, ":entity_name", entity.name)
+      pattern when is_binary(pattern) and pattern != "" ->
+        String.replace(pattern, ":entity_name", entity.name)
+
+      _ ->
+        nil
     end
   end
 

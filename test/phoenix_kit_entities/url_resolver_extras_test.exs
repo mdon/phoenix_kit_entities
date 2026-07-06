@@ -124,6 +124,21 @@ defmodule PhoenixKitEntities.UrlResolverExtrasTest do
       assert result == "/all/gizmo/:slug"
     end
 
+    test "treats a blank global sitemap_entities_pattern as unset (returns nil)" do
+      # The admin-UI schema declares "" as this setting's default, so a blank
+      # value can be persisted. It must resolve to nil — not to an empty pattern
+      # that would collapse every record URL to the site root.
+      Settings.update_setting("sitemap_entities_pattern", "")
+
+      entity = %{name: "blankpat_#{System.unique_integer([:positive])}", settings: %{}}
+
+      assert UrlResolver.get_url_pattern_cached(entity, %{
+               entity_patterns: %{},
+               entity_index_paths: %{},
+               content_routes: []
+             }) == nil
+    end
+
     test "uses an explicit pattern from the routes cache" do
       entity = %{name: "thing", settings: %{}}
 

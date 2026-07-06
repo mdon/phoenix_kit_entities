@@ -8,9 +8,12 @@ defmodule PhoenixKitEntities.SitemapSource do
 
   ## Universal Entity Support
 
-  This source automatically collects ALL published entities regardless of their name.
-  By default, auto-pattern generation is enabled (`sitemap_entities_auto_pattern: true`),
-  which means every entity with published records will be included in the sitemap.
+  This source can collect ALL published entities regardless of their name.
+  Auto-pattern generation is **off** by default
+  (`sitemap_entities_auto_pattern: false`): only entities with a genuinely
+  public route or a configured URL pattern are included. Enable
+  `sitemap_entities_auto_pattern` to also emit a `/:entity_name/:slug` fallback
+  for every published entity — read the warning under "Configuration" first.
 
   ## URL Pattern Resolution
 
@@ -40,7 +43,7 @@ defmodule PhoenixKitEntities.SitemapSource do
       # sitemap_entity_page_pattern = "/content/:slug"
       # Entity "page" generates: /content/my-article
 
-      # Auto-generated fallback (enabled by default):
+      # Auto-generated fallback (opt-in; off by default):
       # Entity "hydraulic_cylinder" generates: /hydraulic_cylinder/my-product
       # Entity "contact_request" generates: /contact_request/request-123
 
@@ -136,7 +139,14 @@ defmodule PhoenixKitEntities.SitemapSource do
   `sitemap_entity_{name}_index_path`) are intentionally NOT included here:
   they're keyed by entity name rather than being a fixed set, so they remain
   console/Settings-only regardless of admin-UI schema support.
+
+  `@impl true` is safe: `sitemap_settings_schema/0` is declared as an
+  `@optional_callbacks` entry on the `Source` behaviour in the pinned
+  `phoenix_kit` (~> 1.7), and the core admin still gates the call behind
+  `function_exported?/3`, so nothing invokes it on releases that predate the
+  schema-rendering UI.
   """
+  @impl true
   @spec sitemap_settings_schema() :: [
           %{
             key: String.t(),
@@ -154,9 +164,8 @@ defmodule PhoenixKitEntities.SitemapSource do
         label: "Include entity index pages",
         help:
           "Emit index/list pages (e.g. /page, /products) alongside individual entity " <>
-            "records. Defaults to on. Before this schema existed, flipping it required a " <>
-            "direct Settings/SQL update -- e.g. hydroforce.ee had to be switched this way " <>
-            "before its entity index pages showed up in the sitemap.",
+            "records. On by default; turn it off to keep only individual record URLs in " <>
+            "the sitemap.",
         default: true
       },
       %{
