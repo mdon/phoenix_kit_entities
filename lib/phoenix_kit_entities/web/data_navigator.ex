@@ -48,7 +48,6 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
       |> assign(:selected_entity, nil)
       |> assign(:selected_entity_uuid, nil)
       |> assign(:selected_status, "all")
-      |> assign(:selected_uuids, MapSet.new())
       |> assign(:search_term, "")
       |> assign(:view_mode, "table")
       |> assign(:entity_data_records, [])
@@ -160,7 +159,6 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
     socket =
       socket
       |> assign(:view_mode, mode)
-      |> assign(:selected_uuids, MapSet.new())
       |> push_patch(to: Routes.path(full_path, locale: socket.assigns.current_locale_base))
 
     {:noreply, socket}
@@ -190,7 +188,6 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
 
     socket =
       socket
-      |> assign(:selected_uuids, MapSet.new())
       |> push_patch(to: Routes.path(full_path, locale: socket.assigns.current_locale_base))
 
     {:noreply, socket}
@@ -210,7 +207,6 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
 
     socket =
       socket
-      |> assign(:selected_uuids, MapSet.new())
       |> push_patch(to: Routes.path(full_path, locale: socket.assigns.current_locale_base))
 
     {:noreply, socket}
@@ -230,7 +226,6 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
 
     socket =
       socket
-      |> assign(:selected_uuids, MapSet.new())
       |> push_patch(to: Routes.path(full_path, locale: socket.assigns.current_locale_base))
 
     {:noreply, socket}
@@ -250,7 +245,6 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
 
     socket =
       socket
-      |> assign(:selected_uuids, MapSet.new())
       |> push_patch(to: Routes.path(full_path, locale: socket.assigns.current_locale_base))
 
     {:noreply, socket}
@@ -447,39 +441,21 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
     {:noreply, put_flash(socket, :error, gettext("Failed to save the new order"))}
   end
 
-  def handle_event("toggle_select", %{"uuid" => uuid}, socket) do
-    selected = socket.assigns.selected_uuids
-
-    selected =
-      if MapSet.member?(selected, uuid),
-        do: MapSet.delete(selected, uuid),
-        else: MapSet.put(selected, uuid)
-
-    {:noreply, assign(socket, :selected_uuids, selected)}
-  end
-
-  def handle_event("select_all", _params, socket) do
-    all_uuids = socket.assigns.entity_data_records |> Enum.map(& &1.uuid) |> MapSet.new()
-    {:noreply, assign(socket, :selected_uuids, all_uuids)}
-  end
-
-  def handle_event("deselect_all", _params, socket) do
-    {:noreply, assign(socket, :selected_uuids, MapSet.new())}
-  end
-
-  def handle_event("bulk_action", %{"action" => "archive"}, socket) do
+  # Bulk actions — selection lives client-side in the BulkSelectScope hook.
+  # Each of these events is fired by a distinct `data-bulk-action` button and
+  # carries the hook's currently-selected UUIDs (a plain list of strings, not
+  # a MapSet) in the payload. None of the downstream `EntityData.bulk_*`
+  # functions require Set semantics — they already normalize to a list
+  # internally — so we pass `uuids` straight through.
+  def handle_event("bulk_archive", %{"uuids" => uuids}, socket) do
     if Scope.admin?(socket.assigns.phoenix_kit_current_scope) do
-      uuids = socket.assigns.selected_uuids
-
-      if MapSet.size(uuids) == 0 do
+      if uuids == [] do
         {:noreply, put_flash(socket, :error, gettext("No records selected"))}
       else
-        {count, _} =
-          EntityData.bulk_update_status(MapSet.to_list(uuids), "archived", actor_opts(socket))
+        {count, _} = EntityData.bulk_update_status(uuids, "archived", actor_opts(socket))
 
         {:noreply,
          socket
-         |> assign(:selected_uuids, MapSet.new())
          |> refresh_data_stats()
          |> apply_filters()
          |> put_flash(:info, gettext("%{count} records archived", count: count))}
@@ -489,19 +465,15 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
     end
   end
 
-  def handle_event("bulk_action", %{"action" => "restore"}, socket) do
+  def handle_event("bulk_restore", %{"uuids" => uuids}, socket) do
     if Scope.admin?(socket.assigns.phoenix_kit_current_scope) do
-      uuids = socket.assigns.selected_uuids
-
-      if MapSet.size(uuids) == 0 do
+      if uuids == [] do
         {:noreply, put_flash(socket, :error, gettext("No records selected"))}
       else
-        {count, _} =
-          EntityData.bulk_update_status(MapSet.to_list(uuids), "published", actor_opts(socket))
+        {count, _} = EntityData.bulk_update_status(uuids, "published", actor_opts(socket))
 
         {:noreply,
          socket
-         |> assign(:selected_uuids, MapSet.new())
          |> refresh_data_stats()
          |> apply_filters()
          |> put_flash(:info, gettext("%{count} records restored", count: count))}
@@ -512,24 +484,23 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
   end
 
   # Bulk "delete" is a soft-delete (trash) — keeps rows alive so parent-app
-  # FK references stay valid. Use the "permanent_delete" action below from
-  # the Trash filter view to actually remove rows.
-  def handle_event("bulk_action", %{"action" => "delete"}, socket) do
-    handle_event("bulk_action", %{"action" => "trash"}, socket)
+  # FK references stay valid. Use "bulk_permanent_delete" below from the
+  # Trash filter view to actually remove rows. The template still labels the
+  # button "Delete"/"Trash" depending on context, so both event names route
+  # to the same handler body.
+  def handle_event("bulk_delete", params, socket) do
+    handle_event("bulk_trash", params, socket)
   end
 
-  def handle_event("bulk_action", %{"action" => "trash"}, socket) do
+  def handle_event("bulk_trash", %{"uuids" => uuids}, socket) do
     if Scope.admin?(socket.assigns.phoenix_kit_current_scope) do
-      uuids = socket.assigns.selected_uuids
-
-      if MapSet.size(uuids) == 0 do
+      if uuids == [] do
         {:noreply, put_flash(socket, :error, gettext("No records selected"))}
       else
-        {count, _} = EntityData.bulk_trash(MapSet.to_list(uuids), actor_opts(socket))
+        {count, _} = EntityData.bulk_trash(uuids, actor_opts(socket))
 
         {:noreply,
          socket
-         |> assign(:selected_uuids, MapSet.new())
          |> refresh_data_stats()
          |> apply_filters()
          |> put_flash(:info, gettext("%{count} records moved to trash", count: count))}
@@ -539,19 +510,15 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
     end
   end
 
-  def handle_event("bulk_action", %{"action" => "restore_from_trash"}, socket) do
+  def handle_event("bulk_restore_from_trash", %{"uuids" => uuids}, socket) do
     if Scope.admin?(socket.assigns.phoenix_kit_current_scope) do
-      uuids = socket.assigns.selected_uuids
-
-      if MapSet.size(uuids) == 0 do
+      if uuids == [] do
         {:noreply, put_flash(socket, :error, gettext("No records selected"))}
       else
-        {count, _} =
-          EntityData.bulk_restore_from_trash(MapSet.to_list(uuids), actor_opts(socket))
+        {count, _} = EntityData.bulk_restore_from_trash(uuids, actor_opts(socket))
 
         {:noreply,
          socket
-         |> assign(:selected_uuids, MapSet.new())
          |> refresh_data_stats()
          |> apply_filters()
          |> put_flash(:info, gettext("%{count} records restored from trash", count: count))}
@@ -561,32 +528,47 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
     end
   end
 
-  def handle_event("bulk_action", %{"action" => "permanent_delete"}, socket) do
+  def handle_event("bulk_permanent_delete", %{"uuids" => uuids}, socket) do
     cond do
       not Scope.admin?(socket.assigns.phoenix_kit_current_scope) ->
         {:noreply, put_flash(socket, :error, gettext("Not authorized"))}
 
-      MapSet.size(socket.assigns.selected_uuids) == 0 ->
+      uuids == [] ->
         {:noreply, put_flash(socket, :error, gettext("No records selected"))}
 
       true ->
-        do_bulk_permanent_delete(socket)
+        do_bulk_permanent_delete(socket, uuids)
     end
   end
 
-  def handle_event("bulk_action", %{"action" => "change_status", "status" => status}, socket) do
-    if Scope.admin?(socket.assigns.phoenix_kit_current_scope) do
-      uuids = socket.assigns.selected_uuids
+  # "Change Status" is a small fixed set of options (Published / Draft /
+  # Archived) rendered directly as toolbar dropdown entries rather than a
+  # separate form — so unlike the modal-based capture-then-act pattern used
+  # by sibling modules for open-ended status pickers, each option gets its
+  # own `data-bulk-action` and reads `uuids` straight from the event payload
+  # like the other direct bulk actions above. No `@bulk_uuids` capture step
+  # is needed since there's no extra param to gather after the click.
+  def handle_event("bulk_set_status_published", %{"uuids" => uuids}, socket) do
+    bulk_change_status(socket, uuids, "published")
+  end
 
-      if MapSet.size(uuids) == 0 do
+  def handle_event("bulk_set_status_draft", %{"uuids" => uuids}, socket) do
+    bulk_change_status(socket, uuids, "draft")
+  end
+
+  def handle_event("bulk_set_status_archived", %{"uuids" => uuids}, socket) do
+    bulk_change_status(socket, uuids, "archived")
+  end
+
+  defp bulk_change_status(socket, uuids, status) do
+    if Scope.admin?(socket.assigns.phoenix_kit_current_scope) do
+      if uuids == [] do
         {:noreply, put_flash(socket, :error, gettext("No records selected"))}
       else
-        {count, _} =
-          EntityData.bulk_update_status(MapSet.to_list(uuids), status, actor_opts(socket))
+        {count, _} = EntityData.bulk_update_status(uuids, status, actor_opts(socket))
 
         {:noreply,
          socket
-         |> assign(:selected_uuids, MapSet.new())
          |> refresh_data_stats()
          |> apply_filters()
          |> put_flash(:info, gettext("%{count} records updated", count: count))}
@@ -596,23 +578,20 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
     end
   end
 
-  defp do_bulk_permanent_delete(socket) do
-    uuids = socket.assigns.selected_uuids
-
-    case EntityData.bulk_delete(MapSet.to_list(uuids), actor_opts(socket)) do
+  defp do_bulk_permanent_delete(socket, uuids) do
+    case EntityData.bulk_delete(uuids, actor_opts(socket)) do
       {count, _} when is_integer(count) ->
         {:noreply,
          socket
-         |> assign(:selected_uuids, MapSet.new())
          |> refresh_data_stats()
          |> apply_filters()
          |> put_flash(:info, gettext("%{count} records permanently deleted", count: count))}
 
       {:error, :referenced_by_external} ->
-        # No `assign(:selected_uuids, MapSet.new())` here — the bulk
-        # delete rolled back. Keeping the selection lets the user
-        # remove the FK-referenced rows from the multi-select and
-        # retry without re-checking each box.
+        # No selection to reset here — selection lives client-side in the
+        # BulkSelectScope hook and the bulk delete rolled back, so the
+        # user's checkboxes are untouched, letting them remove the
+        # FK-referenced rows from the multi-select and retry.
         {:noreply,
          put_flash(socket, :error, PhoenixKitEntities.Errors.message(:referenced_by_external))}
 
@@ -1194,35 +1173,43 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
           </div>
         </div>
 
-        <%!-- Bulk Actions Bar --%>
-        <%= if MapSet.size(@selected_uuids) > 0 do %>
-          <div class="card bg-base-200 shadow-xl mb-6">
+        <%!-- Bulk-select scope: selection lives client-side (BulkSelectScope
+             hook) from here through the end of the Results Section below —
+             the toolbar buttons, the header "select all" checkbox, and every
+             row checkbox (table AND card view) all participate in the same
+             selection set. The server only learns the selected UUIDs at the
+             moment a toolbar button is clicked. --%>
+        <.bulk_select_scope id="entity-data-bulk" total_count={length(@entity_data_records)}>
+          <%!-- Bulk Actions Bar — always rendered; hidden via inline style +
+               data-bulk-show until the hook detects a non-empty selection. --%>
+          <div class="card bg-base-200 shadow-xl mb-6" data-bulk-show="has-selection" style="display: none;">
             <div class="card-body p-4">
               <div class="flex flex-wrap gap-3 items-center">
-                <span class="text-sm font-semibold">
-                  {MapSet.size(@selected_uuids)} {gettext("selected")}
+                <span
+                  class="text-sm font-semibold"
+                  data-bulk-text-template={gettext("%{count} selected", count: "%{count}")}
+                >
                 </span>
                 <div class="divider divider-horizontal mx-0"></div>
                 <%!-- Quick Actions --%>
                 <%= if @selected_status == "trashed" do %>
                   <%!-- Trash-bin actions: restore or permanently delete --%>
                   <button
-                    phx-click="bulk_action"
-                    phx-value-action="restore_from_trash"
+                    type="button"
+                    data-bulk-action="bulk_restore_from_trash"
                     phx-disable-with={gettext("…")}
                     class="btn btn-success btn-sm"
                   >
                     <.icon name="hero-arrow-uturn-left" class="w-4 h-4" /> {gettext("Restore")}
                   </button>
                   <button
-                    phx-click="bulk_action"
-                    phx-value-action="permanent_delete"
+                    type="button"
+                    data-bulk-action="bulk_permanent_delete"
                     phx-disable-with={gettext("…")}
                     class="btn btn-error btn-sm"
                     data-confirm={
                       gettext(
-                        "Permanently delete %{count} records? This cannot be undone, and will fail if any are still referenced by other tables.",
-                        count: MapSet.size(@selected_uuids)
+                        "Permanently delete the selected records? This cannot be undone, and will fail if any are still referenced by other tables."
                       )
                     }
                   >
@@ -1231,30 +1218,29 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                   </button>
                 <% else %>
                   <button
-                    phx-click="bulk_action"
-                    phx-value-action="archive"
+                    type="button"
+                    data-bulk-action="bulk_archive"
                     phx-disable-with={gettext("…")}
                     class="btn btn-warning btn-sm"
                   >
                     <.icon name="hero-archive-box" class="w-4 h-4" /> {gettext("Archive")}
                   </button>
                   <button
-                    phx-click="bulk_action"
-                    phx-value-action="restore"
+                    type="button"
+                    data-bulk-action="bulk_restore"
                     phx-disable-with={gettext("…")}
                     class="btn btn-success btn-sm"
                   >
                     <.icon name="hero-arrow-path" class="w-4 h-4" /> {gettext("Restore")}
                   </button>
                   <button
-                    phx-click="bulk_action"
-                    phx-value-action="trash"
+                    type="button"
+                    data-bulk-action="bulk_trash"
                     phx-disable-with={gettext("…")}
                     class="btn btn-error btn-sm"
                     data-confirm={
                       gettext(
-                        "Move %{count} records to the trash? Restore from the Trash filter if needed.",
-                        count: MapSet.size(@selected_uuids)
+                        "Move the selected records to the trash? Restore from the Trash filter if needed."
                       )
                     }
                   >
@@ -1264,7 +1250,10 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
 
                 <div class="divider divider-horizontal mx-0"></div>
 
-                <%!-- Change Status Dropdown --%>
+                <%!-- Change Status Dropdown — a small fixed set of options, so
+                     each one is its own data-bulk-action (no capture-then-act
+                     modal needed; there's no extra param to gather beyond the
+                     click itself). --%>
                 <div class="dropdown">
                   <label tabindex="0" class="btn btn-ghost btn-sm">
                     <.icon name="hero-arrow-path-rounded-square" class="w-4 h-4" />
@@ -1276,45 +1265,29 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                     class="dropdown-content z-[1] menu p-2 shadow-lg bg-base-100 rounded-box w-52"
                   >
                     <li>
-                      <a
-                        phx-click="bulk_action"
-                        phx-value-action="change_status"
-                        phx-value-status="published"
-                        phx-disable-with={gettext("…")}
-                      >
+                      <a data-bulk-action="bulk_set_status_published" phx-disable-with={gettext("…")}>
                         {gettext("Published")}
                       </a>
                     </li>
                     <li>
-                      <a
-                        phx-click="bulk_action"
-                        phx-value-action="change_status"
-                        phx-value-status="draft"
-                        phx-disable-with={gettext("…")}
-                      >
+                      <a data-bulk-action="bulk_set_status_draft" phx-disable-with={gettext("…")}>
                         {gettext("Draft")}
                       </a>
                     </li>
                     <li>
-                      <a
-                        phx-click="bulk_action"
-                        phx-value-action="change_status"
-                        phx-value-status="archived"
-                        phx-disable-with={gettext("…")}
-                      >
+                      <a data-bulk-action="bulk_set_status_archived" phx-disable-with={gettext("…")}>
                         {gettext("Archived")}
                       </a>
                     </li>
                   </ul>
                 </div>
                 <div class="flex-1"></div>
-                <button phx-click="deselect_all" class="btn btn-ghost btn-sm">
+                <button type="button" data-bulk-clear="true" class="btn btn-ghost btn-sm">
                   <.icon name="hero-x-mark" class="w-4 h-4" /> {gettext("Clear")}
                 </button>
               </div>
             </div>
           </div>
-        <% end %>
 
         <%!-- Results Section --%>
         <%= if Enum.empty?(@entity_data_records) do %>
@@ -1430,24 +1403,11 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                     :if={@selected_entity && length(@entity_data_records) > 1}
                     class="w-8"
                   ></.table_default_header_cell>
-                  <.table_default_header_cell class="w-12">
-                    <%= if length(@entity_data_records) > 0 do %>
-                      <input
-                        type="checkbox"
-                        class="checkbox checkbox-sm"
-                        checked={
-                          MapSet.size(@selected_uuids) == length(@entity_data_records) &&
-                            length(@entity_data_records) > 0
-                        }
-                        phx-click={
-                          if MapSet.size(@selected_uuids) == length(@entity_data_records),
-                            do: "deselect_all",
-                            else: "select_all"
-                        }
-                        title={gettext("Select all")}
-                      />
-                    <% end %>
-                  </.table_default_header_cell>
+                  <.bulk_select_header_cell
+                    id="entity-data-select-all"
+                    class="w-12"
+                    aria_label={gettext("Select all")}
+                  />
                   <.table_default_header_cell>{gettext("Title")}</.table_default_header_cell>
                   <%= if !@selected_entity do %>
                     <.table_default_header_cell>{gettext("Entity")}</.table_default_header_cell>
@@ -1480,15 +1440,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                     >
                       <.icon name="hero-bars-3" class="w-4 h-4" />
                     </.table_default_cell>
-                    <.table_default_cell>
-                      <input
-                        type="checkbox"
-                        class="checkbox checkbox-sm"
-                        phx-click="toggle_select"
-                        phx-value-uuid={data_record.uuid}
-                        checked={MapSet.member?(@selected_uuids, data_record.uuid)}
-                      />
-                    </.table_default_cell>
+                    <.bulk_select_cell value={data_record.uuid} class="w-12" />
                     <.table_default_cell>
                       <.link
                         navigate={
@@ -1637,12 +1589,14 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
                     >
                       <.icon name="hero-bars-3" class="w-5 h-5" />
                     </div>
+                    <%!-- Card view isn't a table, so this can't use
+                         <.bulk_select_cell> (it wraps a <td>) — same
+                         data-bulk-role/data-uuid contract, bare input. --%>
                     <input
                       type="checkbox"
                       class="checkbox checkbox-md mt-1"
-                      phx-click="toggle_select"
-                      phx-value-uuid={data_record.uuid}
-                      checked={MapSet.member?(@selected_uuids, data_record.uuid)}
+                      data-bulk-role="row"
+                      data-uuid={data_record.uuid}
                     />
                     <div class="flex-1">
                       <div class="flex items-start justify-between mb-2">
@@ -1807,6 +1761,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
           </.draggable_list>
           <% end %>
         <% end %>
+        </.bulk_select_scope>
       </div>
     """
   end
