@@ -3044,11 +3044,16 @@ defmodule PhoenixKitEntities.Web.EntityForm do
                 <%!-- Required and Default Value --%>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
-                    <.checkbox
-                      name="field[required]"
-                      checked={@field_form["required"]}
-                      label={gettext("Required Field")}
-                    />
+                    <.label class="label cursor-pointer">
+                      <span class="label-text">{gettext("Required Field")}</span>
+                      <input
+                        type="checkbox"
+                        name="field[required]"
+                        class="toggle toggle-primary"
+                        value="true"
+                        checked={@field_form["required"]}
+                      />
+                    </.label>
                   </div>
 
                   <div>

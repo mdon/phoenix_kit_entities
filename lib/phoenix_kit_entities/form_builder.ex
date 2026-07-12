@@ -37,7 +37,6 @@ defmodule PhoenixKitEntities.FormBuilder do
   import Phoenix.Component
   import PhoenixKitWeb.Components.Core.Icon, only: [icon: 1]
   import PhoenixKitWeb.Components.Core.FormFieldLabel, only: [label: 1]
-  import PhoenixKitWeb.Components.Core.Checkbox, only: [checkbox: 1]
   use Gettext, backend: PhoenixKitWeb.Gettext
 
   alias PhoenixKit.Utils.Format
@@ -463,15 +462,31 @@ defmodule PhoenixKitEntities.FormBuilder do
       <.label>
         {@field["label"]}{if @field["required"] && !@opts[:primary_placeholders], do: " *"}
       </.label>
-      <.checkbox
-        name={"#{@changeset.data.__struct__.__schema__(:source)}[data][#{@field["key"]}]"}
-        checked={@is_checked}
-        class={@opts[:input_class]}
-        disabled={@opts[:disabled]}
-      >
-        {if @is_checked, do: gettext("Enabled"), else: gettext("Disabled")}
-        <:description :if={@field["description"]}>{@field["description"]}</:description>
-      </.checkbox>
+      <div class="form-control">
+        <label class="label cursor-pointer justify-start gap-4">
+          <input
+            type="hidden"
+            name={"#{@changeset.data.__struct__.__schema__(:source)}[data][#{@field["key"]}]"}
+            value="false"
+          />
+          <input
+            type="checkbox"
+            name={"#{@changeset.data.__struct__.__schema__(:source)}[data][#{@field["key"]}]"}
+            value="true"
+            checked={@is_checked}
+            class={["toggle toggle-primary", @opts[:input_class]]}
+            disabled={@opts[:disabled]}
+          />
+          <span class="label-text">
+            {if @is_checked, do: gettext("Enabled"), else: gettext("Disabled")}
+          </span>
+        </label>
+      </div>
+      <%= if @field["description"] do %>
+        <.label class="label">
+          <span class="label-text-alt">{@field["description"]}</span>
+        </.label>
+      <% end %>
     </div>
     """
   end
