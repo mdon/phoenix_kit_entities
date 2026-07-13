@@ -85,6 +85,7 @@ defmodule PhoenixKitEntities do
   """
 
   use Ecto.Schema
+  use PhoenixKit.SchemaPrefix
   use PhoenixKit.Module
 
   import Ecto.Changeset

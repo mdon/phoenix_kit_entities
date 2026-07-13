@@ -71,6 +71,7 @@ defmodule PhoenixKitEntities.EntityData do
   """
 
   use Ecto.Schema
+  use PhoenixKit.SchemaPrefix
   use Gettext, backend: PhoenixKitWeb.Gettext
   import Ecto.Changeset
   import Ecto.Query, warn: false
