@@ -611,8 +611,7 @@ dependency:
 
 ## Versioning & Releases
 
-Releases (version bumps + CHANGELOG entries + tags) are **boss-only** —
-Max handles release cuts personally. Don't auto-bump.
+This project follows [Semantic Versioning](https://semver.org/).
 
 ### Version locations
 
