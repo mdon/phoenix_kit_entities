@@ -32,6 +32,7 @@ defmodule PhoenixKitEntities.Web.EntityForm do
   alias PhoenixKitEntities.Mirror.Storage
   alias PhoenixKitEntities.Presence
   alias PhoenixKitEntities.PresenceHelpers
+  alias PhoenixKitWeb.Actor
 
   @impl true
   def mount(_params, _session, socket) do
@@ -200,7 +201,9 @@ defmodule PhoenixKitEntities.Web.EntityForm do
       |> assign(:has_unsaved_changes, false)
       |> assign(:mirror_path, Storage.root_path())
       |> assign(:sort_mode, Entities.get_sort_mode(entity))
-      |> mount_multilang()
+      # An edit opens on the language being viewed; a new entity starts on
+      # the main language, which holds its required fields.
+      |> mount_multilang(open_on: if(entity.uuid, do: :viewing_language, else: :primary))
 
     hydrate_entity_presence(socket, form_key, entity, current_user)
   end
@@ -1411,15 +1414,9 @@ defmodule PhoenixKitEntities.Web.EntityForm do
 
   # Threads the current user UUID through to context functions that
   # accept `actor_uuid:` opts.
-  defp actor_opts(socket) do
-    case socket.assigns[:phoenix_kit_current_scope] do
-      %{user: %{uuid: uuid}} -> [actor_uuid: uuid]
-      _ -> []
-    end
-  end
 
   defp save_entity(socket, entity_params) do
-    opts = actor_opts(socket)
+    opts = Actor.opts(socket)
 
     if socket.assigns.entity.uuid do
       # Reload entity from database to ensure Ecto detects all changes

@@ -26,6 +26,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
   alias PhoenixKitEntities.FormBuilder
   alias PhoenixKitEntities.Presence
   alias PhoenixKitEntities.PresenceHelpers
+  alias PhoenixKitWeb.Actor
 
   # Fields that should keep their primary-language DB column value on secondary tabs.
   @preserve_fields %{
@@ -222,7 +223,9 @@ defmodule PhoenixKitEntities.Web.DataForm do
       |> assign(:live_source, live_source)
       |> assign(:has_unsaved_changes, false)
       |> assign_parent_options(entity, data_record, locale)
-      |> mount_multilang()
+      # An edit opens on the language being viewed; a new record starts on
+      # the main language, which holds its required fields.
+      |> mount_multilang(open_on: if(data_record.uuid, do: :viewing_language, else: :primary))
 
     hydrate_data_presence(socket, entity, data_record, form_record_key, current_user)
   end
@@ -1498,7 +1501,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
   end
 
   defp save_data_record(socket, data_params) do
-    opts = actor_opts(socket)
+    opts = Actor.opts(socket)
 
     if socket.assigns.data_record.uuid do
       EntityData.update(socket.assigns.data_record, data_params, opts)
@@ -1509,12 +1512,6 @@ defmodule PhoenixKitEntities.Web.DataForm do
 
   # Threads the current user UUID through to context functions that
   # accept `actor_uuid:` opts.
-  defp actor_opts(socket) do
-    case socket.assigns[:phoenix_kit_current_scope] do
-      %{user: %{uuid: uuid}} -> [actor_uuid: uuid]
-      _ -> []
-    end
-  end
 
   defp maybe_add_creator_uuid(params, current_user, data_record) do
     if data_record.uuid do
