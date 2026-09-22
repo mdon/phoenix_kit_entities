@@ -277,15 +277,12 @@ defmodule PhoenixKitEntities.EntityData do
   # meaningful when both uuids are present and distinct (the self-parent
   # check covers the equal case).
   #
-  # Race window: the chain is read at *validation* time, not at commit
-  # time, with no row locks. Two concurrent edits on the same chain in
-  # opposite directions can each pass their own validator pass and then
-  # both commit, producing a cycle the DB will accept. A future fix
-  # would either (a) wrap update/2 in a transaction that re-runs the
-  # check under a serializing `pg_advisory_xact_lock(hashtext(entity_uuid))`,
-  # or (b) add a Postgres BEFORE-INSERT/UPDATE trigger on `parent_uuid`
-  # that runs a recursive-CTE acyclicity check and aborts. Tracked as a
-  # follow-up.
+  # The chain is read at validation time, so two edits on one chain in
+  # opposite directions (A under B, B under A) would each pass and both
+  # commit a cycle — it did, every time, on a live install. `update/3`
+  # therefore runs a re-parent in a transaction that first takes the
+  # entity's tree lock (`lock_tree/1`): the second re-parent waits, and
+  # its check then reads the first one's committed parent.
   defp validate_parent_not_descendant(changeset) do
     uuid = get_field(changeset, :uuid)
     parent_uuid = get_field(changeset, :parent_uuid)
@@ -1985,8 +1982,7 @@ defmodule PhoenixKitEntities.EntityData do
         case Keyword.get(opts, :require_status) do
           nil ->
             entity_data
-            |> changeset(attrs)
-            |> repo().update()
+            |> update_in_tree(attrs)
             |> notify_data_event(:updated, opts)
 
           statuses when is_list(statuses) ->
@@ -2048,6 +2044,8 @@ defmodule PhoenixKitEntities.EntityData do
   defp update_with_status_guard(entity_data, attrs, statuses, opts) do
     txn =
       repo().transaction(fn ->
+        if reparenting?(entity_data, attrs), do: lock_tree(entity_data.entity_uuid)
+
         from(d in __MODULE__, where: d.uuid == ^entity_data.uuid, lock: "FOR UPDATE")
         |> repo().one()
         |> apply_status_guarded_update(statuses, attrs)
@@ -2063,6 +2061,43 @@ defmodule PhoenixKitEntities.EntityData do
       {:error, {:changeset_error, changeset}} ->
         notify_data_event({:error, changeset}, :updated, opts)
     end
+  end
+
+  # A write that gives the record a new parent runs under the entity's tree
+  # lock, so its cycle check (`validate_parent_not_descendant/1`) cannot
+  # race another re-parent. Anything else writes as it always did.
+  defp update_in_tree(entity_data, attrs) do
+    if reparenting?(entity_data, attrs) do
+      repo().transaction(fn -> locked_update(entity_data, attrs) end)
+    else
+      entity_data |> changeset(attrs) |> repo().update()
+    end
+  end
+
+  defp locked_update(entity_data, attrs) do
+    lock_tree(entity_data.entity_uuid)
+
+    case entity_data |> changeset(attrs) |> repo().update() do
+      {:ok, updated} -> updated
+      {:error, changeset} -> repo().rollback(changeset)
+    end
+  end
+
+  # Moving to the top level cannot make a cycle; only a new, non-nil
+  # parent can.
+  defp reparenting?(%__MODULE__{parent_uuid: current}, attrs) do
+    case Map.get(attrs, :parent_uuid, Map.get(attrs, "parent_uuid", current)) do
+      parent when parent in [nil, ""] -> false
+      parent -> to_string(parent) != to_string(current)
+    end
+  end
+
+  # One re-parent at a time per entity: a transaction-scoped lock, held
+  # until the write commits.
+  defp lock_tree(entity_uuid) do
+    repo().query!("SELECT pg_advisory_xact_lock(hashtext($1))", [
+      "phoenix_kit_entities:tree:#{entity_uuid}"
+    ])
   end
 
   # `nil` covers the row having disappeared entirely between the caller
