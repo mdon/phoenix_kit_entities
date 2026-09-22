@@ -1250,6 +1250,11 @@ defmodule PhoenixKitEntities.Web.DataFormLiveTest do
       view |> form("form") |> render_submit()
 
       assert EntityData.get(ctx.record.uuid).parent_uuid == ctx.a.uuid
+
+      assert_activity_logged("entity_data.updated",
+        resource_uuid: ctx.record.uuid,
+        actor_uuid: ctx.actor_uuid
+      )
     end
 
     test "the picker leaves out the record itself and everything under it", %{conn: conn} = ctx do
@@ -1259,6 +1264,9 @@ defmodule PhoenixKitEntities.Web.DataFormLiveTest do
 
       assert has_element?(view, ~s(#data-parent-picker [data-tree-node="root"]))
       refute has_element?(view, ~s(#data-parent-picker [data-tree-node="#{ctx.a.uuid}"]))
+      # B is A's child: were only A's own row dropped, B would be a top-level
+      # orphan, shown under the open "Top level" row.
+      refute has_element?(view, ~s(#data-parent-picker [data-tree-node="#{ctx.b.uuid}"]))
       refute has_element?(view, ~s(#data-parent-picker [data-tree-node="#{ctx.c.uuid}"]))
     end
 
@@ -1296,6 +1304,38 @@ defmodule PhoenixKitEntities.Web.DataFormLiveTest do
 
       changeset = :sys.get_state(spectator_view.pid).socket.assigns.changeset
       assert Ecto.Changeset.get_field(changeset, :parent_uuid) == ctx.a.uuid
+      # The pick a save would write follows too.
+      assert :sys.get_state(spectator_view.pid).socket.assigns.parent_pick == ctx.a.uuid
+    end
+
+    test "a reload after another session's save takes that session's parent",
+         %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, edit_url(ctx.entity, ctx.record))
+
+      {:ok, _} = EntityData.update(ctx.record, %{parent_uuid: ctx.a.uuid})
+      :sys.replace_state(view.pid, &put_in(&1.socket.assigns[:lock_owner?], false))
+      send(view.pid, {:data_updated, ctx.entity.uuid, ctx.record.uuid})
+      _ = render(view)
+
+      assert :sys.get_state(view.pid).socket.assigns.parent_pick == ctx.a.uuid
+    end
+
+    test "a spectator promoted to owner saves the parent it now shows", %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, edit_url(ctx.entity, ctx.record))
+
+      # Another session moved the record while this one watched, then left.
+      {:ok, _} = EntityData.update(ctx.record, %{parent_uuid: ctx.a.uuid})
+      :sys.replace_state(view.pid, &put_in(&1.socket.assigns[:lock_owner?], false))
+      send(view.pid, %Phoenix.Socket.Broadcast{event: "presence_diff", payload: %{}})
+      _ = render(view)
+
+      assert :sys.get_state(view.pid).socket.assigns.lock_owner?
+      assert :sys.get_state(view.pid).socket.assigns.parent_pick == ctx.a.uuid
+
+      view |> form("form") |> render_submit()
+      assert EntityData.get(ctx.record.uuid).parent_uuid == ctx.a.uuid
     end
 
     test "reset puts the picker back on the saved parent", %{conn: conn} = ctx do

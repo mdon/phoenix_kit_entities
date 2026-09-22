@@ -232,16 +232,25 @@ defmodule PhoenixKitEntities.Web.DataForm do
     hydrate_data_presence(socket, entity, data_record, form_record_key, current_user)
   end
 
-  # The parent picker's tree for the current record: every live row of the
-  # entity, nested, under a "Top level" row that means no parent. The row
-  # itself and everything under it are left out — picking either would
-  # create a cycle. Trashed rows are left out too; a live row under a
-  # trashed parent moves up to the top.
+  # A save writes the parent the picker shows (`parent_pick`), never one the
+  # client posted.
   defp with_parent_pick(data_params, socket) do
     parent = socket.assigns.parent_pick
     Map.put(data_params, "parent_uuid", if(parent == Tree.root_id(), do: "", else: parent))
   end
 
+  # Wherever the form takes a record's state from elsewhere — another
+  # session's edits, a reload after one saved, a promotion from spectator —
+  # the pick follows it; left behind, the next save would silently put the
+  # old parent back.
+  defp sync_parent_pick(socket, record),
+    do: assign(socket, :parent_pick, record.parent_uuid || Tree.root_id())
+
+  # The parent picker's tree for the current record: every live row of the
+  # entity, nested, under a "Top level" row that means no parent. The row
+  # itself and everything under it are left out — picking either would
+  # create a cycle. Trashed rows are left out too; a live row under a
+  # trashed parent moves up to the top.
   defp assign_parent_tree(socket, entity, data_record, locale) do
     rows =
       entity.uuid
@@ -964,6 +973,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
           |> assign(:form_record_key, data_record.uuid)
           |> assign(:form_record_topic_key, normalize_record_key(data_record.uuid))
           |> assign(:changeset, changeset)
+          |> sync_parent_pick(data_record)
           |> put_flash(
             :info,
             gettext("Record updated in another session. Showing latest changes.")
@@ -1061,6 +1071,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
         socket
         |> assign(:data_record, data_record)
         |> assign(:changeset, EntityData.change(data_record))
+        |> sync_parent_pick(data_record)
         |> assign(:has_unsaved_changes, false)
         |> then(&{:noreply, &1})
       else
@@ -1441,6 +1452,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
     socket
     |> assign(:data_record, updated_record)
     |> assign(:changeset, validated_changeset)
+    |> sync_parent_pick(updated_record)
     |> assign(:has_unsaved_changes, true)
   end
 
@@ -1539,9 +1551,6 @@ defmodule PhoenixKitEntities.Web.DataForm do
       EntityData.create(data_params, opts)
     end
   end
-
-  # Threads the current user UUID through to context functions that
-  # accept `actor_uuid:` opts.
 
   defp maybe_add_creator_uuid(params, current_user, data_record) do
     if data_record.uuid do

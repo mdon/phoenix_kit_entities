@@ -2044,7 +2044,9 @@ defmodule PhoenixKitEntities.EntityData do
   defp update_with_status_guard(entity_data, attrs, statuses, opts) do
     txn =
       repo().transaction(fn ->
-        if reparenting?(entity_data, attrs), do: lock_tree(entity_data.entity_uuid)
+        # Decided from the attrs alone: the struct the caller holds can be
+        # stale, and the write below starts from the re-read row.
+        if names_parent?(attrs), do: lock_tree(entity_data.entity_uuid)
 
         from(d in __MODULE__, where: d.uuid == ^entity_data.uuid, lock: "FOR UPDATE")
         |> repo().one()
@@ -2091,6 +2093,9 @@ defmodule PhoenixKitEntities.EntityData do
       parent -> to_string(parent) != to_string(current)
     end
   end
+
+  defp names_parent?(attrs),
+    do: Map.get(attrs, :parent_uuid, Map.get(attrs, "parent_uuid")) not in [nil, ""]
 
   # One re-parent at a time per entity: a transaction-scoped lock, held
   # until the write commits.

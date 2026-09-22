@@ -184,9 +184,6 @@ defmodule PhoenixKitEntities.Web.Entities do
 
   # Helper Functions
 
-  # Threads the current user UUID through to context functions that
-  # accept `actor_uuid:` opts.
-
   # Extracts the base path (without query string) from the current URL,
   # which already includes the correct locale and prefix segments.
   defp current_base_path(socket) do

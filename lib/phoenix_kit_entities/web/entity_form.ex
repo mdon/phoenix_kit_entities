@@ -1412,9 +1412,6 @@ defmodule PhoenixKitEntities.Web.EntityForm do
     |> assign(:field_error, nil)
   end
 
-  # Threads the current user UUID through to context functions that
-  # accept `actor_uuid:` opts.
-
   defp save_entity(socket, entity_params) do
     opts = Actor.opts(socket)
 

@@ -579,10 +579,6 @@ defmodule PhoenixKitEntities.Web.EntitiesSettings do
 
   # Private Functions
 
-  # Threads the current user UUID through to context functions that
-  # accept `actor_uuid:` opts. Returns `[]` for logged-out / system
-  # contexts so the activity row simply has `actor_uuid: nil`.
-
   defp build_changeset(settings, action \\ nil) do
     types = %{
       entities_enabled: :boolean,
