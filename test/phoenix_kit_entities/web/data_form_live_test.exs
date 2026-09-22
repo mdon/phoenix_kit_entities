@@ -184,6 +184,20 @@ defmodule PhoenixKitEntities.Web.DataFormLiveTest do
     end
   end
 
+  test "a save is logged with the signed-in actor", %{conn: conn} = ctx do
+    # Not the record's creator, so a fallback to the creator cannot pass.
+    editor = Ecto.UUID.generate()
+    conn = put_test_scope(conn, fake_scope(user_uuid: editor))
+    {:ok, view, _html} = live(conn, edit_url(ctx.entity, ctx.record))
+
+    render_submit(view, "save", %{"phoenix_kit_entity_data" => %{"title" => "Attributed"}})
+
+    assert_activity_logged("entity_data.updated",
+      resource_uuid: ctx.record.uuid,
+      actor_uuid: editor
+    )
+  end
+
   describe "a crafted save payload cannot write fields the form never renders" do
     test "created_by_uuid, date_created, metadata and position are ignored",
          %{conn: conn} = ctx do

@@ -84,6 +84,19 @@ defmodule PhoenixKitEntities.Web.EntityFormLiveTest do
     end
   end
 
+  test "a save is logged with the signed-in actor", %{conn: conn} = ctx do
+    # Not the entity's creator, so a fallback to the creator cannot pass.
+    editor = Ecto.UUID.generate()
+    conn = put_test_scope(conn, fake_scope(user_uuid: editor))
+    {:ok, view, _html} = live(conn, "/en/admin/entities/#{ctx.entity.uuid}/edit")
+
+    view
+    |> form("form[phx-change='validate']", %{"entities" => %{"display_name" => "Attributed"}})
+    |> render_submit()
+
+    assert_activity_logged("entity.updated", resource_uuid: ctx.entity.uuid, actor_uuid: editor)
+  end
+
   describe "save_and_return" do
     test "Update and Return navigates back to /admin/entities", %{conn: conn} = ctx do
       conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
