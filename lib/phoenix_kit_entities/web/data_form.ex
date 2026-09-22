@@ -237,6 +237,11 @@ defmodule PhoenixKitEntities.Web.DataForm do
   # itself and everything under it are left out — picking either would
   # create a cycle. Trashed rows are left out too; a live row under a
   # trashed parent moves up to the top.
+  defp with_parent_pick(data_params, socket) do
+    parent = socket.assigns.parent_pick
+    Map.put(data_params, "parent_uuid", if(parent == Tree.root_id(), do: "", else: parent))
+  end
+
   defp assign_parent_tree(socket, entity, data_record, locale) do
     rows =
       entity.uuid
@@ -333,6 +338,8 @@ defmodule PhoenixKitEntities.Web.DataForm do
 
   def handle_event("validate", %{"phoenix_kit_entity_data" => data_params} = params, socket) do
     if socket.assigns[:lock_owner?] do
+      data_params = with_parent_pick(data_params, socket)
+
       socket
       |> track_slug_ownership(params, data_params)
       |> then(&do_validate(data_params, &1))
@@ -356,7 +363,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
 
   def handle_event("save", %{"phoenix_kit_entity_data" => data_params}, socket) do
     if socket.assigns[:lock_owner?] do
-      do_save(data_params, socket)
+      do_save(with_parent_pick(data_params, socket), socket)
     else
       {:noreply, put_flash(socket, :error, gettext("Cannot save - you are spectating"))}
     end
@@ -400,6 +407,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
         socket
         |> assign(:data_record, data_record)
         |> assign(:changeset, changeset)
+        |> assign(:parent_pick, data_record.parent_uuid || Tree.root_id())
         |> put_flash(:info, gettext("Changes reset to last saved state"))
         |> broadcast_data_form_state(extract_changeset_params(changeset))
 
@@ -869,14 +877,25 @@ defmodule PhoenixKitEntities.Web.DataForm do
 
   ## Live updates
 
-  # The parent picker posts `parent_pick` through its hidden input, so the
-  # next validate and the save read it like any other field. Spectators do
-  # not pick.
+  # The parent is the server's (`parent_pick`): the picker shows it and
+  # validate/save take it from here, never from the posted form — a
+  # keystroke sent before a pick's patch still carries the old value.
+  # Spectators do not pick.
   @impl true
   def handle_info({TreePicker, "data-parent-picker", id}, socket) do
-    if socket.assigns[:lock_owner?],
-      do: {:noreply, assign(socket, :parent_pick, id)},
-      else: {:noreply, socket}
+    if socket.assigns[:lock_owner?] do
+      socket = assign(socket, :parent_pick, id)
+
+      # Spectators follow the pick at once, not at the next keystroke.
+      params =
+        socket.assigns.changeset
+        |> extract_changeset_params()
+        |> then(&with_parent_pick(&1, socket))
+
+      {:noreply, broadcast_data_form_state(socket, params)}
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_info({:media_selected, [file_uuid | _]}, socket) do
@@ -1405,6 +1424,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
         :title,
         :slug,
         :status,
+        :parent_uuid,
         :data,
         :metadata,
         :created_by_uuid
@@ -1449,7 +1469,16 @@ defmodule PhoenixKitEntities.Web.DataForm do
     changeset
     |> Ecto.Changeset.apply_changes()
     |> Map.from_struct()
-    |> Map.take([:entity_uuid, :title, :slug, :status, :data, :metadata, :created_by_uuid])
+    |> Map.take([
+      :entity_uuid,
+      :title,
+      :slug,
+      :status,
+      :parent_uuid,
+      :data,
+      :metadata,
+      :created_by_uuid
+    ])
     |> Enum.into(%{}, fn {key, value} -> {to_string(key), value} end)
   end
 

@@ -1262,47 +1262,50 @@ defmodule PhoenixKitEntities.Web.DataFormLiveTest do
       refute has_element?(view, ~s(#data-parent-picker [data-tree-node="#{ctx.c.uuid}"]))
     end
 
-    # For the three rejection tests below, `Phoenix.LiveViewTest.form/3`
-    # validates submitted select values against the picker's rendered
-    # options — which is exactly what the LV does for happy users.
-    # These tests simulate a bypass attempt (custom client / crafted
-    # payload) by firing the "save" event directly so the changeset
-    # layer's validations are what's exercised, not the form helper.
-    test "rejects self-parent — record cannot be its own parent",
-         %{conn: conn} = ctx do
+    # The parent is the server's pick: a payload naming another parent —
+    # crafted, or a keystroke sent before the pick's patch arrived — is
+    # ignored. The changeset's own refusals (self, other entity, cycle,
+    # trashed) are pinned in entity_data_parent_test.exs.
+    test "a posted parent_uuid never overrides the picked parent", %{conn: conn} = ctx do
       conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
       {:ok, view, _html} = live(conn, edit_url(ctx.entity, ctx.record))
 
-      render_hook(view, "save", %{
-        "phoenix_kit_entity_data" => %{"parent_uuid" => ctx.record.uuid}
+      pick_parent(view, ctx.a.uuid)
+
+      render_change(view, "validate", %{
+        "phoenix_kit_entity_data" => %{"title" => "Hello", "parent_uuid" => ""}
       })
 
-      assert is_nil(EntityData.get(ctx.record.uuid).parent_uuid)
+      render_hook(view, "save", %{
+        "phoenix_kit_entity_data" => %{"title" => "Hello", "parent_uuid" => ctx.other_record.uuid}
+      })
+
+      assert EntityData.get(ctx.record.uuid).parent_uuid == ctx.a.uuid
     end
 
-    test "rejects a parent from a different entity",
-         %{conn: conn} = ctx do
+    test "a spectator follows the owner's pick at once", %{conn: conn} = ctx do
+      owner = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, owner_view, _html} = live(owner, edit_url(ctx.entity, ctx.record))
+
+      spectator = put_test_scope(Phoenix.ConnTest.build_conn(), fake_scope())
+      {:ok, spectator_view, _html} = live(spectator, edit_url(ctx.entity, ctx.record))
+      assert :sys.get_state(spectator_view.pid).socket.assigns.readonly?
+
+      pick_parent(owner_view, ctx.a.uuid)
+      _ = render(spectator_view)
+
+      changeset = :sys.get_state(spectator_view.pid).socket.assigns.changeset
+      assert Ecto.Changeset.get_field(changeset, :parent_uuid) == ctx.a.uuid
+    end
+
+    test "reset puts the picker back on the saved parent", %{conn: conn} = ctx do
       conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
       {:ok, view, _html} = live(conn, edit_url(ctx.entity, ctx.record))
 
-      render_hook(view, "save", %{
-        "phoenix_kit_entity_data" => %{"parent_uuid" => ctx.other_record.uuid}
-      })
+      pick_parent(view, ctx.a.uuid)
+      render_click(view, "reset", %{})
 
-      assert is_nil(EntityData.get(ctx.record.uuid).parent_uuid)
-    end
-
-    test "rejects a parent that is the record's descendant (cycle)",
-         %{conn: conn} = ctx do
-      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
-      {:ok, view, _html} = live(conn, edit_url(ctx.entity, ctx.a))
-
-      # A → C would form A→C→B→A.
-      render_hook(view, "save", %{
-        "phoenix_kit_entity_data" => %{"parent_uuid" => ctx.c.uuid}
-      })
-
-      assert is_nil(EntityData.get(ctx.a.uuid).parent_uuid)
+      assert :sys.get_state(view.pid).socket.assigns.parent_pick == "root"
     end
 
     test "clearing parent_uuid (selecting None) persists nil",

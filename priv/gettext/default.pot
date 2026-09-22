@@ -2785,3 +2785,8 @@ msgstr ""
 #, elixir-autogen, elixir-format
 msgid "Top level"
 msgstr ""
+
+#: lib/phoenix_kit_entities/entity_data.ex
+#, elixir-autogen, elixir-format
+msgid "parent record is in the trash"
+msgstr ""

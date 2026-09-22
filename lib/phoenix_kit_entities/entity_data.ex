@@ -85,6 +85,7 @@ defmodule PhoenixKitEntities.EntityData do
   alias PhoenixKit.Utils.HtmlSanitizer
   alias PhoenixKit.Utils.Multilang
   alias PhoenixKit.Utils.Number
+  alias PhoenixKit.Utils.TreeQuery
   alias PhoenixKit.Utils.UUID, as: UUIDUtils
   alias PhoenixKitEntities, as: Entities
   alias PhoenixKitEntities.Events
@@ -246,6 +247,13 @@ defmodule PhoenixKitEntities.EntityData do
       nil ->
         add_error(changeset, :parent_uuid, gettext("parent record does not exist"))
 
+      # A parent being SET must be live. A row whose parent was trashed
+      # later keeps it, so editing its other fields is not blocked.
+      %__MODULE__{entity_uuid: ^entity_uuid, status: "trashed"} ->
+        if get_change(changeset, :parent_uuid),
+          do: add_error(changeset, :parent_uuid, gettext("parent record is in the trash")),
+          else: changeset
+
       %__MODULE__{entity_uuid: ^entity_uuid} ->
         changeset
 
@@ -263,24 +271,21 @@ defmodule PhoenixKitEntities.EntityData do
     Postgrex.Error -> changeset
   end
 
-  # Walk up from the proposed parent toward the root; if we ever hit
-  # the row we are editing, the parent assignment would create a cycle.
-  # Only meaningful when both uuids are present and distinct (the
-  # self-parent check covers the equal case).
+  # The proposed parent's ancestors, in one recursive query
+  # (`PhoenixKit.Utils.TreeQuery`, cycle-safe, no depth cap): if the row
+  # being edited is among them, the assignment would create a cycle. Only
+  # meaningful when both uuids are present and distinct (the self-parent
+  # check covers the equal case).
   #
   # Race window: the chain is read at *validation* time, not at commit
   # time, with no row locks. Two concurrent edits on the same chain in
   # opposite directions can each pass their own validator pass and then
   # both commit, producing a cycle the DB will accept. A future fix
   # would either (a) wrap update/2 in a transaction that re-runs the
-  # walk under `SELECT … FOR UPDATE` on the ancestor chain plus a
-  # serializing `pg_advisory_xact_lock(hashtext(entity_uuid))` to block
-  # concurrent inserts, or (b) add a Postgres BEFORE-INSERT/UPDATE
-  # trigger on `parent_uuid` that runs a recursive-CTE acyclicity
-  # check and aborts. Option (b) ships from the companion migration
-  # repo; tracked as a follow-up. The in-memory walk caps at
-  # `@max_ancestor_depth` so even if a pre-existing cycle slips
-  # through, the validator can't loop forever.
+  # check under a serializing `pg_advisory_xact_lock(hashtext(entity_uuid))`,
+  # or (b) add a Postgres BEFORE-INSERT/UPDATE trigger on `parent_uuid`
+  # that runs a recursive-CTE acyclicity check and aborts. Tracked as a
+  # follow-up.
   defp validate_parent_not_descendant(changeset) do
     uuid = get_field(changeset, :uuid)
     parent_uuid = get_field(changeset, :parent_uuid)
@@ -294,7 +299,7 @@ defmodule PhoenixKitEntities.EntityData do
   end
 
   defp check_no_cycle(changeset, self_id, parent_id) do
-    if ancestor_chain_contains?(parent_id, self_id, 0) do
+    if self_id in TreeQuery.ancestor_uuids(__MODULE__, parent_id) do
       add_error(
         changeset,
         :parent_uuid,
@@ -306,23 +311,6 @@ defmodule PhoenixKitEntities.EntityData do
   rescue
     DBConnection.ConnectionError -> changeset
     Postgrex.Error -> changeset
-  end
-
-  # Bounded walk — a tree this deep is a bug, but the guard keeps the
-  # validator from looping forever if the DB somehow already has a
-  # cycle (shouldn't happen, but be defensive).
-  @max_ancestor_depth 64
-
-  defp ancestor_chain_contains?(_uuid, _target, depth) when depth >= @max_ancestor_depth,
-    do: false
-
-  defp ancestor_chain_contains?(uuid, target, depth) do
-    case repo().get(__MODULE__, uuid) do
-      nil -> false
-      %__MODULE__{parent_uuid: nil} -> false
-      %__MODULE__{parent_uuid: ^target} -> true
-      %__MODULE__{parent_uuid: next} -> ancestor_chain_contains?(next, target, depth + 1)
-    end
   end
 
   defp validate_entity_reference(changeset) do
