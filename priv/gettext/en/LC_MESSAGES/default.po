@@ -2780,3 +2780,8 @@ msgstr "That record belongs to %{entity}."
 #, elixir-autogen, elixir-format
 msgid "Settings"
 msgstr "Settings"
+
+#: lib/phoenix_kit_entities/web/data_form.ex
+#, elixir-autogen, elixir-format
+msgid "Top level"
+msgstr "Top level"

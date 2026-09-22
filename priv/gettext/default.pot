@@ -2780,3 +2780,8 @@ msgstr ""
 #, elixir-autogen, elixir-format
 msgid "Settings"
 msgstr ""
+
+#: lib/phoenix_kit_entities/web/data_form.ex
+#, elixir-autogen, elixir-format
+msgid "Top level"
+msgstr ""

@@ -160,6 +160,13 @@ Repo-local aliases:
   soft-delete — keep them distinct so audit consumers can tell which ran.
   LV call sites thread `Actor.opts(socket)` (core's `PhoenixKitWeb.Actor`) so
   rows pin `actor_uuid`.
+- **A record's parent is picked in core's `TreePicker`**, never an indented
+  flat `<select>`: `Web.DataForm` builds the tree with
+  `PhoenixKit.Utils.Tree.from_flat/2`, leaves out the record's own subtree
+  (picking into it would create a cycle), and the picker posts
+  `parent_uuid` through its hidden input, so validate and save read it like
+  any other field. The changeset still refuses a self, cross-entity or cyclic
+  parent sent by a crafted payload.
 - **Edit forms open on the viewing language.** The entity and entity-data forms
   pass `open_on: :viewing_language` to `mount_multilang/2` for an existing
   record and the main language for a new one, whose required fields live there.

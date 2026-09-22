@@ -1246,11 +1246,20 @@ defmodule PhoenixKitEntities.Web.DataFormLiveTest do
       conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
       {:ok, view, _html} = live(conn, edit_url(ctx.entity, ctx.record))
 
-      view
-      |> form("form", phoenix_kit_entity_data: %{parent_uuid: ctx.a.uuid})
-      |> render_submit()
+      pick_parent(view, ctx.a.uuid)
+      view |> form("form") |> render_submit()
 
       assert EntityData.get(ctx.record.uuid).parent_uuid == ctx.a.uuid
+    end
+
+    test "the picker leaves out the record itself and everything under it", %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, edit_url(ctx.entity, ctx.a))
+      view |> element("#data-parent-picker-change") |> render_click()
+
+      assert has_element?(view, ~s(#data-parent-picker [data-tree-node="root"]))
+      refute has_element?(view, ~s(#data-parent-picker [data-tree-node="#{ctx.a.uuid}"]))
+      refute has_element?(view, ~s(#data-parent-picker [data-tree-node="#{ctx.c.uuid}"]))
     end
 
     # For the three rejection tests below, `Phoenix.LiveViewTest.form/3`
@@ -1304,15 +1313,21 @@ defmodule PhoenixKitEntities.Web.DataFormLiveTest do
       conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
       {:ok, view, _html} = live(conn, edit_url(ctx.entity, ctx.record))
 
-      view
-      |> form("form", phoenix_kit_entity_data: %{parent_uuid: ""})
-      |> render_submit()
+      pick_parent(view, "root")
+      view |> form("form") |> render_submit()
 
       assert is_nil(EntityData.get(ctx.record.uuid).parent_uuid)
     end
   end
 
   # ── helpers ──────────────────────────────────────────────────
+
+  # The parent is picked in core's TreePicker: open it, click the row; the
+  # picker then posts the pick through its hidden input with the form.
+  defp pick_parent(view, id) do
+    view |> element("#data-parent-picker-change") |> render_click()
+    view |> element(~s(#data-parent-picker [data-tree-node="#{id}"])) |> render_click()
+  end
 
   defp edit_url(entity, record),
     do: "/en/admin/entities/#{entity.name}/data/#{record.uuid}/edit"
