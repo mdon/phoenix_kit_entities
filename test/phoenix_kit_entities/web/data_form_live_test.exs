@@ -53,8 +53,23 @@ defmodule PhoenixKitEntities.Web.DataFormLiveTest do
       conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
       {:ok, _view, html} = live(conn, edit_url(ctx.entity, ctx.record))
 
-      assert html =~ "<title>Edit DF Test</title>"
+      # `Admin Panel / Entities / DF Tests / Hello / Edit` — the record has
+      # no page of its own, so its crumb is text.
+      assert html =~ "<title>Edit</title>"
+
+      assert %{section: {"Entities", _}, crumbs: [{"DF Tests", entity_path}, {"Hello", nil}]} =
+               page_trail(html)
+
+      assert String.ends_with?(entity_path, "/admin/entities/df_test/data")
       assert html =~ ~s|value="Hello"|
+    end
+
+    test "a new record is `<entity> / New record`", %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, _view, html} = live(conn, new_url(ctx.entity))
+
+      assert html =~ "<title>New record</title>"
+      assert %{section: {"Entities", _}, crumbs: [{"DF Tests", _}]} = page_trail(html)
     end
 
     test "form has phx-disable-with on submit (delta-pin C5)", %{conn: conn} = ctx do
@@ -440,7 +455,7 @@ defmodule PhoenixKitEntities.Web.DataFormLiveTest do
       {:ok, view, _html} = live(conn, edit_url(ctx.entity, ctx.record))
 
       render_hook(view, "switch_language", %{"lang" => "totally-fake"})
-      assert page_title(view) =~ "Edit DF Test"
+      assert page_title(view) == "Edit"
     end
 
     test "accepts a known language and remains on the form", %{conn: conn} = ctx do
@@ -449,7 +464,7 @@ defmodule PhoenixKitEntities.Web.DataFormLiveTest do
 
       # Without multilang enabled the LV no-ops; the assertion is "no crash".
       render_hook(view, "switch_language", %{"lang" => "en-US"})
-      assert page_title(view) =~ "Edit DF Test"
+      assert page_title(view) == "Edit"
     end
   end
 
@@ -565,7 +580,7 @@ defmodule PhoenixKitEntities.Web.DataFormLiveTest do
       {:ok, view, _html} = live(conn, edit_url(ctx.entity, ctx.record))
 
       send(view.pid, {:totally_unrelated, "junk", :payload})
-      assert page_title(view) =~ "Edit DF Test"
+      assert page_title(view) == "Edit"
     end
 
     test "logs at :debug level so unexpected messages stay visible in dev",
@@ -597,7 +612,7 @@ defmodule PhoenixKitEntities.Web.DataFormLiveTest do
         |> form("form", phoenix_kit_entity_data: %{title: "Updated"})
         |> render_change()
 
-      assert page_title(view) =~ "Edit DF Test"
+      assert page_title(view) == "Edit"
     end
   end
 
@@ -622,7 +637,7 @@ defmodule PhoenixKitEntities.Web.DataFormLiveTest do
       {:ok, view, _html} = live(conn, edit_url(ctx.entity, ctx.record))
 
       render_hook(view, "reset", %{})
-      assert page_title(view) =~ "Edit DF Test"
+      assert page_title(view) == "Edit"
     end
   end
 
@@ -703,7 +718,7 @@ defmodule PhoenixKitEntities.Web.DataFormLiveTest do
       {:ok, view, _html} = live(conn, edit_url(ctx.entity, ctx.record))
 
       render_hook(view, "generate_slug", %{})
-      assert page_title(view) =~ "Edit DF Test"
+      assert page_title(view) == "Edit"
     end
   end
 

@@ -156,22 +156,16 @@ defmodule PhoenixKitEntities.Web.DataForm do
     current_user = socket.assigns[:phoenix_kit_current_user]
 
     # The breadcrumb bar carries the page identity: "Entities / <Plural> /
-    # Edit <Entity> · subtitle". Nothing in the body repeats it.
+    # <record> / Edit · subtitle" (or "… / <Plural> / New record"). Nothing
+    # in the body repeats it.
     {page_title, page_subtitle} =
       if data_record.uuid do
-        {gettext("Edit %{entity}", entity: entity.display_name),
+        {gettext("Edit"),
          gettext("Update data for the %{entity} entity", entity: entity.display_name)}
       else
-        {gettext("Create New %{entity}", entity: entity.display_name),
+        {gettext("New record"),
          gettext("Add data for the %{entity} entity", entity: entity.display_name)}
       end
-
-    page_crumbs = [
-      %{
-        label: entity.display_name_plural || entity.display_name,
-        path: Routes.path("/admin/entities/#{entity.name}/data")
-      }
-    ]
 
     # For new records, set default status to "published" to avoid validation errors
     changeset =
@@ -211,7 +205,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
       |> assign(:page_subtitle, page_subtitle)
       |> assign(:page_section, gettext("Entities"))
       |> assign(:page_section_path, Routes.path("/admin/entities"))
-      |> assign(:page_crumbs, page_crumbs)
+      |> assign(:page_crumbs, data_crumbs(entity, data_record))
       |> assign(:project_title, project_title)
       |> assign(:entity, entity)
       |> assign(:data_record, data_record)
@@ -230,6 +224,30 @@ defmodule PhoenixKitEntities.Web.DataForm do
       |> mount_multilang(open_on: if(data_record.uuid, do: :viewing_language, else: :primary))
 
     hydrate_data_presence(socket, entity, data_record, form_record_key, current_user)
+  end
+
+  # Every level between the module and this form: the entity's records page,
+  # then the record itself. The record has no page of its own (this form is
+  # its data page), so its crumb is text. It names the SAVED record — the
+  # callers refresh it when a save lands, not while a title is being typed.
+  defp data_crumbs(entity, data_record) do
+    entity_crumb = %{
+      label: entity.display_name_plural || entity.display_name,
+      path: Routes.path("/admin/entities/#{entity.name}/data")
+    }
+
+    case data_record do
+      %EntityData{uuid: nil} -> [entity_crumb]
+      %EntityData{title: title} -> [entity_crumb, %{label: title}]
+    end
+  end
+
+  defp refresh_page_crumbs(socket) do
+    assign(
+      socket,
+      :page_crumbs,
+      data_crumbs(socket.assigns.entity, socket.assigns.data_record)
+    )
   end
 
   # A save writes the parent the picker shows (`parent_pick`), never one the
@@ -866,6 +884,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
 
       socket
       |> assign(:data_record, saved_record)
+      |> refresh_page_crumbs()
       |> assign(:changeset, changeset)
       |> put_flash(:info, gettext("Data record saved successfully"))
       |> broadcast_data_form_state(params)
@@ -970,6 +989,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
         socket =
           socket
           |> assign(:data_record, data_record)
+          |> refresh_page_crumbs()
           |> assign(:form_record_key, data_record.uuid)
           |> assign(:form_record_topic_key, normalize_record_key(data_record.uuid))
           |> assign(:changeset, changeset)
@@ -1070,6 +1090,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
 
         socket
         |> assign(:data_record, data_record)
+        |> refresh_page_crumbs()
         |> assign(:changeset, EntityData.change(data_record))
         |> sync_parent_pick(data_record)
         |> assign(:has_unsaved_changes, false)
@@ -1473,6 +1494,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
     socket
     |> assign(:entity, entity)
     |> assign(:data_record, data_record)
+    |> refresh_page_crumbs()
     |> assign(:changeset, changeset)
     |> refresh_multilang()
   end

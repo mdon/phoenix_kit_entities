@@ -58,7 +58,7 @@ defmodule PhoenixKitEntities.Web.EntityForm do
     socket =
       socket
       |> drop_self_referer(uri)
-      |> hydrate_entity_form(entity, changeset, gettext("Edit Entity"))
+      |> hydrate_entity_form(entity, changeset, gettext("Edit"))
 
     {:noreply, socket}
   end
@@ -71,9 +71,23 @@ defmodule PhoenixKitEntities.Web.EntityForm do
     socket =
       socket
       |> drop_self_referer(uri)
-      |> hydrate_entity_form(entity, changeset, gettext("New Entity"))
+      |> hydrate_entity_form(entity, changeset, gettext("New entity"))
 
     {:noreply, socket}
+  end
+
+  # The header trail above the form: `Entities / <entity> / Edit`. An entity
+  # has no show page of its own — its records page stands in for it, so the
+  # crumb links there. A new entity is not a level yet.
+  defp entity_crumbs(%{uuid: nil}), do: []
+
+  defp entity_crumbs(entity) do
+    [
+      %{
+        label: entity.display_name_plural || entity.display_name,
+        path: Routes.path("/admin/entities/#{entity.name}/data")
+      }
+    ]
   end
 
   # Pull `_live_referer` out of the connect params, parse the path, and
@@ -179,6 +193,7 @@ defmodule PhoenixKitEntities.Web.EntityForm do
       |> assign(:page_subtitle, gettext("Define your custom content type with dynamic fields"))
       |> assign(:page_section, gettext("Entities"))
       |> assign(:page_section_path, Routes.path("/admin/entities"))
+      |> assign(:page_crumbs, entity_crumbs(entity))
       |> assign(:project_title, project_title)
       |> assign(:entity, entity)
       |> assign(:changeset, changeset)

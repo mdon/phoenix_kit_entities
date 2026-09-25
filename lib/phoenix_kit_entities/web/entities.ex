@@ -37,8 +37,6 @@ defmodule PhoenixKitEntities.Web.Entities do
         :page_subtitle,
         gettext("Create and manage custom content types with dynamic fields")
       )
-      |> assign(:page_section, gettext("Modules"))
-      |> assign(:page_section_path, Routes.path("/admin/modules"))
       |> assign(:project_title, project_title)
       |> assign(:view_mode, "table")
       |> assign(:entities, [])

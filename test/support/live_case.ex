@@ -60,6 +60,35 @@ defmodule PhoenixKitEntities.LiveCase do
   end
 
   @doc """
+  The admin header trail a page declares, read back from the static HTML
+  `live/2` returns (the test root layout renders the assigns into
+  `#page-trail`; the real header bar draws exactly these levels):
+
+      %{section: {"Entities", "/en/admin/entities"} | nil,
+        crumbs: [{"DF Tests", "/en/admin/entities/df_test/data"}, {"Hello", nil}]}
+  """
+  def page_trail(html) do
+    doc = LazyHTML.from_document(html)
+
+    section =
+      case Enum.to_list(LazyHTML.query(doc, "#page-trail [data-section]")) do
+        [el] -> trail_level(el)
+        [] -> nil
+      end
+
+    crumbs =
+      doc
+      |> LazyHTML.query("#page-trail [data-crumb]")
+      |> Enum.map(&trail_level/1)
+
+    %{section: section, crumbs: crumbs}
+  end
+
+  defp trail_level(el) do
+    {String.trim(LazyHTML.text(el)), List.first(LazyHTML.attribute(el, "data-path"))}
+  end
+
+  @doc """
   Returns a real `PhoenixKit.Users.Auth.Scope` struct for testing.
 
   Most admin LiveViews check `Scope.can_access_admin_area?(scope)`
