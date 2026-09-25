@@ -3,7 +3,9 @@ defmodule PhoenixKitEntities.TreeLockTest do
   A re-parent holds the entity's tree lock through its cycle check, so two
   in opposite directions at once cannot both pass and commit a loop. The
   sandbox runs every test on one connection and cannot race, so this holds
-  the lock from a second, real connection and watches a re-parent wait.
+  the lock from a second, real connection and watches a re-parent wait. That
+  pins the key and that the lock is taken; the two-writer race itself was
+  proved on a live node, not here.
   """
   use PhoenixKitEntities.DataCase, async: false
 

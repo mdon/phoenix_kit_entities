@@ -266,9 +266,11 @@ defmodule PhoenixKitEntities.EntityData do
     end
   rescue
     # If the repo isn't started yet (compile-time, etc.) leave parent
-    # alone — the DB-level FK will catch a bogus id at insert time.
+    # alone — the DB-level FK will catch a bogus id at insert time. A
+    # database error is not swallowed: the check runs inside the re-parent
+    # transaction, which the error has already aborted, so answering a
+    # valid changeset would only move the crash to the write that follows.
     DBConnection.ConnectionError -> changeset
-    Postgrex.Error -> changeset
   end
 
   # The proposed parent's ancestors, in one recursive query
@@ -307,7 +309,6 @@ defmodule PhoenixKitEntities.EntityData do
     end
   rescue
     DBConnection.ConnectionError -> changeset
-    Postgrex.Error -> changeset
   end
 
   defp validate_entity_reference(changeset) do
@@ -2085,17 +2086,23 @@ defmodule PhoenixKitEntities.EntityData do
     end
   end
 
-  # Moving to the top level cannot make a cycle; only a new, non-nil
-  # parent can.
+  # Any change of parent counts, a move to the top level included: it
+  # closes no cycle, but it must not slip past the lock the other tree
+  # writers hold.
   defp reparenting?(%__MODULE__{parent_uuid: current}, attrs) do
-    case Map.get(attrs, :parent_uuid, Map.get(attrs, "parent_uuid", current)) do
-      parent when parent in [nil, ""] -> false
-      parent -> to_string(parent) != to_string(current)
+    if names_parent?(attrs) do
+      parent = Map.get(attrs, :parent_uuid, Map.get(attrs, "parent_uuid"))
+      normalize_parent(parent) != normalize_parent(current)
+    else
+      false
     end
   end
 
+  defp normalize_parent(parent) when parent in [nil, ""], do: nil
+  defp normalize_parent(parent), do: to_string(parent)
+
   defp names_parent?(attrs),
-    do: Map.get(attrs, :parent_uuid, Map.get(attrs, "parent_uuid")) not in [nil, ""]
+    do: Map.has_key?(attrs, :parent_uuid) or Map.has_key?(attrs, "parent_uuid")
 
   # One re-parent at a time per entity: a transaction-scoped lock, held
   # until the write commits.

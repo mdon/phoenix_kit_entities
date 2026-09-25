@@ -163,9 +163,9 @@ Repo-local aliases:
 - **A record's parent is picked in core's `TreePicker`**, never an indented
   flat `<select>`: `Web.DataForm` builds the tree with
   `PhoenixKit.Utils.Tree.from_flat/2`, leaves out the record's own subtree
-  (picking into it would create a cycle), and the picker posts
-  `parent_uuid` through its hidden input, so validate and save read it like
-  any other field. The changeset still refuses a self, cross-entity or cyclic
+  (picking into it would create a cycle); validate and save take the parent
+  from the server's `parent_pick` (set by the picker's message), never from
+  the posted form. The changeset still refuses a self, cross-entity or cyclic
   parent sent by a crafted payload.
 - **Edit forms open on the viewing language.** The entity and entity-data forms
   pass `open_on: :viewing_language` to `mount_multilang/2` for an existing
@@ -353,7 +353,8 @@ Core APIs relied on: `PhoenixKit.Settings`, `RepoHelper`, `Dashboard.Tab` +
 `Dashboard.Registry`, `Users.Auth.Scope`, `Modules.Languages` and its
 `DialectMapper`, `Utils.Multilang`, `Utils.HtmlSanitizer`, `Utils.Routes`,
 `Modules.Sitemap.*`, `PubSub.Manager`, `PhoenixKitWeb.*` components and layout,
-and `PhoenixKit.Activity`.
+`PhoenixKit.Activity` and `PhoenixKitWeb.Actor`, `Components.TreePicker` with
+`Utils.Tree` and `Utils.TreeQuery`, and `Storage.ResourceFolders`.
 
 ### Data model
 
