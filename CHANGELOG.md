@@ -1,3 +1,41 @@
+## 0.4.17 - 2026-09-26
+
+### Changed
+
+- **A record's parent is picked in core's `TreePicker`** (#50). It replaces the
+  indented `<select>`. The tree leaves out the record and everything under it,
+  and a "Top level" row means no parent. The form saves the parent the picker
+  shows, never one the client posts. A parent change made in another session,
+  a reload, or a promotion from spectator moves the pick with it, so a save
+  can no longer put the old parent back.
+- **Edit forms open on the language being viewed** (#50). A new entity or
+  record still opens on the main language, where its required fields are.
+- **The admin header trail names every level** (#50):
+  `Entities / <Plural> / <record> / Edit`, and `Entities / <entity> / Edit`
+  on the entity form. The entity list's section is Entities, not Modules.
+- The acting user, activity logging and the media-picker scope folder now go
+  through core (`PhoenixKitWeb.Actor`, `PhoenixKit.Activity`,
+  `Storage.ResourceFolders`) (#50). The folder hook contract is unchanged.
+- **Requires `phoenix_kit` 2.38.0 or later** (`>= 2.38.0 and < 3.0.0`).
+  Earlier cores lack the tree picker, `Utils.Tree`/`TreeQuery`,
+  `PhoenixKitWeb.Actor` and `ResourceFolders`.
+- Dependency lock: `phoenix_kit` 2.40.1, `phoenix_kit_templates` 0.2.0,
+  `phoenix` 1.8.15, `mdex` 0.14.0.
+
+### Fixed
+
+- **Two opposite re-parents no longer commit a cycle** (#50). A change of
+  parent, including a move to the top level, now runs under a per-entity
+  advisory lock. The second move waits, then its cycle check reads the
+  first one's committed parent. The cycle check is a single recursive query
+  with no depth cap.
+- A record can no longer be given a parent that is in the trash (#50). A
+  record whose parent was trashed later can still be edited.
+- A database error inside the parent checks is no longer swallowed (#50). It
+  used to let the save continue inside an already-aborted transaction.
+- After a save was refused over the parent, picking another parent now clears
+  the old error right away instead of at the next keystroke.
+
 ## 0.4.16 - 2026-09-16
 
 ### Changed

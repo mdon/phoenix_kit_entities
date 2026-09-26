@@ -10,8 +10,9 @@ entity are stored as *entity data* rows sharing one JSONB shape. It implements
 the `PhoenixKit.Module` behaviour, so a host app gets the admin UI, settings,
 permissions, migrations and routes by adding the dependency — no wiring.
 
-- **Depends on:** `phoenix_kit` `~> 2.26` (Hex; 2.26 is the first core with
-  `<.decimal_input>` and `Number.parse_decimal/2`), `phoenix_live_view` `~> 1.0`,
+- **Depends on:** `phoenix_kit` `>= 2.38.0 and < 3.0.0` (Hex; 2.38.0 is the
+  first core with `TreePicker`, `Utils.Tree`/`TreeQuery`, `PhoenixKitWeb.Actor`,
+  `Storage.ResourceFolders` and `mount_multilang(open_on:)`), `phoenix_live_view` `~> 1.0`,
   `gettext` `~> 1.0`. `lazy_html` is test-only (`Phoenix.LiveViewTest`'s HTML
   parser). No sibling `phoenix_kit_*` deps.
 - **Consumed by:** `phoenix_kit_catalogue` (attribute sets are MANAGED
@@ -289,10 +290,11 @@ Repo-local aliases:
   the OLD translation with no runtime error. The catalogues here are edited by
   hand for that reason; `gettext_catalogue_test.exs` fails the build on any
   fuzzy entry.
-- Narrowing the core pin to a three-segment `~> 2.26.x` breaks CONSUMERS only
-  (`~> 2.26.x` excludes every 2.27+ core, so a host wanting both this module
-  and a newer core gets an unsolvable dep set). Raising the two-segment floor
-  is fine, and required whenever code starts calling a newer core API.
+- Narrowing the core pin to a three-segment `~> 2.38.x` breaks CONSUMERS only
+  (`~> 2.38.x` excludes every 2.39+ core, so a host wanting both this module
+  and a newer core gets an unsolvable dep set). Raising the floor of the
+  compound `>= 2.38.0 and < 3.0.0` pin is fine, and required whenever code
+  starts calling a newer core API.
   `core_pin_conformance_test.exs` guards it; nothing else in this repo would
   notice.
 - `Web.DataNavigator` auto-flips an entity's `sort_mode` to `"manual"` on the

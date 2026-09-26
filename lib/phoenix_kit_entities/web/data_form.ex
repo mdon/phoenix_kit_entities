@@ -252,9 +252,19 @@ defmodule PhoenixKitEntities.Web.DataForm do
 
   # A save writes the parent the picker shows (`parent_pick`), never one the
   # client posted.
-  defp with_parent_pick(data_params, socket) do
-    parent = socket.assigns.parent_pick
-    Map.put(data_params, "parent_uuid", if(parent == Tree.root_id(), do: "", else: parent))
+  defp with_parent_pick(data_params, socket),
+    do: Map.put(data_params, "parent_uuid", pick_to_parent(socket.assigns.parent_pick) || "")
+
+  defp pick_to_parent(pick), do: if(pick == Tree.root_id(), do: nil, else: pick)
+
+  # A refusal under the picker (a trashed or cyclic parent from the last
+  # save or validate) was about the OLD pick; left in place it would still
+  # show under the new one until the next keystroke. The new pick is checked
+  # in full by the next validate or save. Other fields' errors stay.
+  defp repick_parent(changeset, pick) do
+    changeset = Ecto.Changeset.put_change(changeset, :parent_uuid, pick_to_parent(pick))
+    errors = Keyword.delete(changeset.errors, :parent_uuid)
+    %{changeset | errors: errors, valid?: errors == []}
   end
 
   # Wherever the form takes a record's state from elsewhere — another
@@ -434,7 +444,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
         socket
         |> assign(:data_record, data_record)
         |> assign(:changeset, changeset)
-        |> assign(:parent_pick, data_record.parent_uuid || Tree.root_id())
+        |> sync_parent_pick(data_record)
         |> put_flash(:info, gettext("Changes reset to last saved state"))
         |> broadcast_data_form_state(extract_changeset_params(changeset))
 
@@ -533,9 +543,9 @@ defmodule PhoenixKitEntities.Web.DataForm do
     assign(socket, :changeset, changeset)
   end
 
-  # The parent picker is rendered as a raw <select>, so any changeset
-  # error on :parent_uuid doesn't surface through <.input>'s built-in
-  # error block. Pull the first error message manually for the template.
+  # The parent picker is core's TreePicker, not an <.input>, so a changeset
+  # error on :parent_uuid has no built-in error block. Pull the first error
+  # message manually for the template.
   defp parent_uuid_error(%Ecto.Changeset{action: action, errors: errors})
        when action in [:validate, :insert, :update] do
     case Keyword.get(errors, :parent_uuid) do
@@ -912,7 +922,10 @@ defmodule PhoenixKitEntities.Web.DataForm do
   @impl true
   def handle_info({TreePicker, "data-parent-picker", id}, socket) do
     if socket.assigns[:lock_owner?] do
-      socket = assign(socket, :parent_pick, id)
+      socket =
+        socket
+        |> assign(:parent_pick, id)
+        |> assign(:changeset, repick_parent(socket.assigns.changeset, id))
 
       # Spectators follow the pick at once, not at the next keystroke.
       params =

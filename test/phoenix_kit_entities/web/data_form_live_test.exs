@@ -1367,6 +1367,22 @@ defmodule PhoenixKitEntities.Web.DataFormLiveTest do
       assert EntityData.get(ctx.record.uuid).parent_uuid == ctx.a.uuid
     end
 
+    test "a new pick clears the refusal the old one earned", %{conn: conn} = ctx do
+      conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
+      {:ok, view, _html} = live(conn, edit_url(ctx.entity, ctx.record))
+
+      # A went to the trash after the picker's tree was built.
+      pick_parent(view, ctx.a.uuid)
+      {:ok, _} = EntityData.trash(ctx.a)
+      assert view |> form("form") |> render_submit() =~ "parent record is in the trash"
+
+      pick_parent(view, "root")
+      refute render(view) =~ "parent record is in the trash"
+
+      view |> form("form") |> render_submit()
+      assert is_nil(EntityData.get(ctx.record.uuid).parent_uuid)
+    end
+
     test "reset puts the picker back on the saved parent", %{conn: conn} = ctx do
       conn = put_test_scope(conn, fake_scope(user_uuid: ctx.actor_uuid))
       {:ok, view, _html} = live(conn, edit_url(ctx.entity, ctx.record))
