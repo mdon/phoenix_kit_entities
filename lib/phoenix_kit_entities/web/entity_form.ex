@@ -32,6 +32,7 @@ defmodule PhoenixKitEntities.Web.EntityForm do
   alias PhoenixKitEntities.Mirror.Storage
   alias PhoenixKitEntities.Presence
   alias PhoenixKitEntities.PresenceHelpers
+  alias PhoenixKitWeb.Actor
 
   @impl true
   def mount(_params, _session, socket) do
@@ -57,7 +58,7 @@ defmodule PhoenixKitEntities.Web.EntityForm do
     socket =
       socket
       |> drop_self_referer(uri)
-      |> hydrate_entity_form(entity, changeset, gettext("Edit Entity"))
+      |> hydrate_entity_form(entity, changeset, gettext("Edit"))
 
     {:noreply, socket}
   end
@@ -70,9 +71,23 @@ defmodule PhoenixKitEntities.Web.EntityForm do
     socket =
       socket
       |> drop_self_referer(uri)
-      |> hydrate_entity_form(entity, changeset, gettext("New Entity"))
+      |> hydrate_entity_form(entity, changeset, gettext("New entity"))
 
     {:noreply, socket}
+  end
+
+  # The header trail above the form: `Entities / <entity> / Edit`. An entity
+  # has no show page of its own — its records page stands in for it, so the
+  # crumb links there. A new entity is not a level yet.
+  defp entity_crumbs(%{uuid: nil}), do: []
+
+  defp entity_crumbs(entity) do
+    [
+      %{
+        label: entity.display_name_plural || entity.display_name,
+        path: Routes.path("/admin/entities/#{entity.name}/data")
+      }
+    ]
   end
 
   # Pull `_live_referer` out of the connect params, parse the path, and
@@ -178,6 +193,7 @@ defmodule PhoenixKitEntities.Web.EntityForm do
       |> assign(:page_subtitle, gettext("Define your custom content type with dynamic fields"))
       |> assign(:page_section, gettext("Entities"))
       |> assign(:page_section_path, Routes.path("/admin/entities"))
+      |> assign(:page_crumbs, entity_crumbs(entity))
       |> assign(:project_title, project_title)
       |> assign(:entity, entity)
       |> assign(:changeset, changeset)
@@ -200,7 +216,9 @@ defmodule PhoenixKitEntities.Web.EntityForm do
       |> assign(:has_unsaved_changes, false)
       |> assign(:mirror_path, Storage.root_path())
       |> assign(:sort_mode, Entities.get_sort_mode(entity))
-      |> mount_multilang()
+      # An edit opens on the language being viewed; a new entity starts on
+      # the main language, which holds its required fields.
+      |> mount_multilang(open_on: if(entity.uuid, do: :viewing_language, else: :primary))
 
     hydrate_entity_presence(socket, form_key, entity, current_user)
   end
@@ -1409,17 +1427,8 @@ defmodule PhoenixKitEntities.Web.EntityForm do
     |> assign(:field_error, nil)
   end
 
-  # Threads the current user UUID through to context functions that
-  # accept `actor_uuid:` opts.
-  defp actor_opts(socket) do
-    case socket.assigns[:phoenix_kit_current_scope] do
-      %{user: %{uuid: uuid}} -> [actor_uuid: uuid]
-      _ -> []
-    end
-  end
-
   defp save_entity(socket, entity_params) do
-    opts = actor_opts(socket)
+    opts = Actor.opts(socket)
 
     if socket.assigns.entity.uuid do
       # Reload entity from database to ensure Ecto detects all changes

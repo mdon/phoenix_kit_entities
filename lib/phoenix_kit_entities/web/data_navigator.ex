@@ -20,6 +20,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
   alias PhoenixKitEntities, as: Entities
   alias PhoenixKitEntities.EntityData
   alias PhoenixKitEntities.Events
+  alias PhoenixKitWeb.Actor
 
   @impl true
   def mount(params, _session, socket) do
@@ -99,16 +100,6 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
       |> apply_filters()
 
     {:noreply, socket}
-  end
-
-  # Threads the current user UUID through to context functions that
-  # accept `actor_uuid:` opts. Returns `[]` for logged-out / system
-  # contexts so the activity row simply has `actor_uuid: nil`.
-  defp actor_opts(socket) do
-    case socket.assigns[:phoenix_kit_current_scope] do
-      %{user: %{uuid: uuid}} -> [actor_uuid: uuid]
-      _ -> []
-    end
   end
 
   # Resolve entity and entity_uuid from URL params
@@ -265,7 +256,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
     if Scope.can_access_admin_area?(socket.assigns.phoenix_kit_current_scope) do
       data_record = EntityData.get!(uuid)
 
-      case EntityData.update_data(data_record, %{status: "archived"}, actor_opts(socket)) do
+      case EntityData.update_data(data_record, %{status: "archived"}, Actor.opts(socket)) do
         {:ok, _data} ->
           socket =
             socket
@@ -287,7 +278,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
     if Scope.can_access_admin_area?(socket.assigns.phoenix_kit_current_scope) do
       data_record = EntityData.get!(uuid)
 
-      case EntityData.update_data(data_record, %{status: "published"}, actor_opts(socket)) do
+      case EntityData.update_data(data_record, %{status: "published"}, Actor.opts(socket)) do
         {:ok, _data} ->
           socket =
             socket
@@ -309,7 +300,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
     if Scope.can_access_admin_area?(socket.assigns.phoenix_kit_current_scope) do
       data_record = EntityData.get!(uuid)
 
-      case EntityData.trash(data_record, actor_opts(socket)) do
+      case EntityData.trash(data_record, Actor.opts(socket)) do
         {:ok, _data} ->
           {:noreply,
            socket
@@ -332,7 +323,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
     if Scope.can_access_admin_area?(socket.assigns.phoenix_kit_current_scope) do
       data_record = EntityData.get!(uuid)
 
-      case EntityData.restore_from_trash(data_record, actor_opts(socket)) do
+      case EntityData.restore_from_trash(data_record, Actor.opts(socket)) do
         {:ok, _data} ->
           {:noreply,
            socket
@@ -355,7 +346,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
     if Scope.can_access_admin_area?(socket.assigns.phoenix_kit_current_scope) do
       data_record = EntityData.get!(uuid)
 
-      case EntityData.delete(data_record, actor_opts(socket)) do
+      case EntityData.delete(data_record, Actor.opts(socket)) do
         {:ok, _data} ->
           {:noreply,
            socket
@@ -399,7 +390,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
           _ -> data_record.status
         end
 
-      case EntityData.update_data(data_record, %{status: new_status}, actor_opts(socket)) do
+      case EntityData.update_data(data_record, %{status: new_status}, Actor.opts(socket)) do
         {:ok, _updated_data} ->
           socket =
             socket
@@ -463,7 +454,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
       if uuids == [] do
         {:noreply, put_flash(socket, :error, gettext("No records selected"))}
       else
-        {count, _} = EntityData.bulk_update_status(uuids, "archived", actor_opts(socket))
+        {count, _} = EntityData.bulk_update_status(uuids, "archived", Actor.opts(socket))
 
         {:noreply,
          socket
@@ -481,7 +472,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
       if uuids == [] do
         {:noreply, put_flash(socket, :error, gettext("No records selected"))}
       else
-        {count, _} = EntityData.bulk_update_status(uuids, "published", actor_opts(socket))
+        {count, _} = EntityData.bulk_update_status(uuids, "published", Actor.opts(socket))
 
         {:noreply,
          socket
@@ -508,7 +499,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
       if uuids == [] do
         {:noreply, put_flash(socket, :error, gettext("No records selected"))}
       else
-        {count, _} = EntityData.bulk_trash(uuids, actor_opts(socket))
+        {count, _} = EntityData.bulk_trash(uuids, Actor.opts(socket))
 
         {:noreply,
          socket
@@ -526,7 +517,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
       if uuids == [] do
         {:noreply, put_flash(socket, :error, gettext("No records selected"))}
       else
-        {count, _} = EntityData.bulk_restore_from_trash(uuids, actor_opts(socket))
+        {count, _} = EntityData.bulk_restore_from_trash(uuids, Actor.opts(socket))
 
         {:noreply,
          socket
@@ -576,7 +567,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
       if uuids == [] do
         {:noreply, put_flash(socket, :error, gettext("No records selected"))}
       else
-        {count, _} = EntityData.bulk_update_status(uuids, status, actor_opts(socket))
+        {count, _} = EntityData.bulk_update_status(uuids, status, Actor.opts(socket))
 
         {:noreply,
          socket
@@ -590,7 +581,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
   end
 
   defp do_bulk_permanent_delete(socket, uuids) do
-    case EntityData.bulk_delete(uuids, actor_opts(socket)) do
+    case EntityData.bulk_delete(uuids, Actor.opts(socket)) do
       {count, _} when is_integer(count) ->
         {:noreply,
          socket
@@ -615,7 +606,7 @@ defmodule PhoenixKitEntities.Web.DataNavigator do
     {entity, sort_flipped?} = ensure_manual_sort(socket.assigns.selected_entity)
     entity_uuid = socket.assigns.selected_entity_uuid
 
-    case EntityData.reorder(entity_uuid, ordered_ids, actor_opts(socket)) do
+    case EntityData.reorder(entity_uuid, ordered_ids, Actor.opts(socket)) do
       :ok ->
         socket =
           socket

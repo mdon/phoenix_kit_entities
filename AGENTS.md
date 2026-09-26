@@ -147,9 +147,9 @@ Repo-local aliases:
 - **`enable_system/1` and `disable_system/1`** use `module_key()` rather than a
   literal, and both log a `module.entities.{enabled,disabled}` activity row.
 - **Activity logging** goes through `PhoenixKitEntities.ActivityLog.log/1`,
-  which stamps `module: "entities"`, guards `PhoenixKit.Activity` with
-  `Code.ensure_loaded?/1` and rescues, so a logging failure never crashes the
-  mutation. Notification-side wiring lives in `notify_entity_event/2` and
+  which stamps `module: "entities"` and hands the entry to core's
+  `PhoenixKit.Activity`, which never raises, so a logging failure never crashes
+  the mutation. Notification-side wiring lives in `notify_entity_event/2` and
   `notify_data_event/2`, piped after every CRUD repo call so logging only fires
   on `:ok` and an `:error` tuple flows through unchanged. Actions are
   `entity.{verb}` / `entity_data.{verb}` where verb is one of `created`,
@@ -158,7 +158,18 @@ Repo-local aliases:
   `translation_set`; module toggles use `module.entities.{enabled,disabled}`.
   `entity_data.deleted` is hard-delete and `entity_data.trashed` is
   soft-delete — keep them distinct so audit consumers can tell which ran.
-  LV call sites thread `actor_opts(socket)` so rows pin `actor_uuid`.
+  LV call sites thread `Actor.opts(socket)` (core's `PhoenixKitWeb.Actor`) so
+  rows pin `actor_uuid`.
+- **A record's parent is picked in core's `TreePicker`**, never an indented
+  flat `<select>`: `Web.DataForm` builds the tree with
+  `PhoenixKit.Utils.Tree.from_flat/2`, leaves out the record's own subtree
+  (picking into it would create a cycle); validate and save take the parent
+  from the server's `parent_pick` (set by the picker's message), never from
+  the posted form. The changeset still refuses a self, cross-entity or cyclic
+  parent sent by a crafted payload.
+- **Edit forms open on the viewing language.** The entity and entity-data forms
+  pass `open_on: :viewing_language` to `mount_multilang/2` for an existing
+  record and the main language for a new one, whose required fields live there.
 - **PII guardrail at the source:** never log `email`, `phone`, free-text
   `description` fields, raw `data` JSONB blobs, or any user-typed field. Safe
   metadata: `name`, `display_name`, `slug`, `status`, derived counts, FK uuids.
@@ -342,8 +353,8 @@ Core APIs relied on: `PhoenixKit.Settings`, `RepoHelper`, `Dashboard.Tab` +
 `Dashboard.Registry`, `Users.Auth.Scope`, `Modules.Languages` and its
 `DialectMapper`, `Utils.Multilang`, `Utils.HtmlSanitizer`, `Utils.Routes`,
 `Modules.Sitemap.*`, `PubSub.Manager`, `PhoenixKitWeb.*` components and layout,
-and `PhoenixKit.Activity` — the last is optional and degrades gracefully when
-absent.
+`PhoenixKit.Activity` and `PhoenixKitWeb.Actor`, `Components.TreePicker` with
+`Utils.Tree` and `Utils.TreeQuery`, and `Storage.ResourceFolders`.
 
 ### Data model
 

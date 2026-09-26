@@ -19,6 +19,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
   alias PhoenixKit.Utils.Multilang
   alias PhoenixKit.Utils.Routes
   alias PhoenixKit.Utils.Slug
+  alias PhoenixKit.Utils.Tree
   alias PhoenixKitEntities, as: Entities
   alias PhoenixKitEntities.Attachments
   alias PhoenixKitEntities.EntityData
@@ -26,6 +27,8 @@ defmodule PhoenixKitEntities.Web.DataForm do
   alias PhoenixKitEntities.FormBuilder
   alias PhoenixKitEntities.Presence
   alias PhoenixKitEntities.PresenceHelpers
+  alias PhoenixKitWeb.Actor
+  alias PhoenixKitWeb.Components.TreePicker
 
   # Fields that should keep their primary-language DB column value on secondary tabs.
   @preserve_fields %{
@@ -153,22 +156,16 @@ defmodule PhoenixKitEntities.Web.DataForm do
     current_user = socket.assigns[:phoenix_kit_current_user]
 
     # The breadcrumb bar carries the page identity: "Entities / <Plural> /
-    # Edit <Entity> · subtitle". Nothing in the body repeats it.
+    # <record> / Edit · subtitle" (or "… / <Plural> / New record"). Nothing
+    # in the body repeats it.
     {page_title, page_subtitle} =
       if data_record.uuid do
-        {gettext("Edit %{entity}", entity: entity.display_name),
+        {gettext("Edit"),
          gettext("Update data for the %{entity} entity", entity: entity.display_name)}
       else
-        {gettext("Create New %{entity}", entity: entity.display_name),
+        {gettext("New record"),
          gettext("Add data for the %{entity} entity", entity: entity.display_name)}
       end
-
-    page_crumbs = [
-      %{
-        label: entity.display_name_plural || entity.display_name,
-        path: Routes.path("/admin/entities/#{entity.name}/data")
-      }
-    ]
 
     # For new records, set default status to "published" to avoid validation errors
     changeset =
@@ -208,7 +205,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
       |> assign(:page_subtitle, page_subtitle)
       |> assign(:page_section, gettext("Entities"))
       |> assign(:page_section_path, Routes.path("/admin/entities"))
-      |> assign(:page_crumbs, page_crumbs)
+      |> assign(:page_crumbs, data_crumbs(entity, data_record))
       |> assign(:project_title, project_title)
       |> assign(:entity, entity)
       |> assign(:data_record, data_record)
@@ -221,39 +218,68 @@ defmodule PhoenixKitEntities.Web.DataForm do
       |> assign(:form_record_topic_key, normalize_record_key(form_record_key))
       |> assign(:live_source, live_source)
       |> assign(:has_unsaved_changes, false)
-      |> assign_parent_options(entity, data_record, locale)
-      |> mount_multilang()
+      |> assign_parent_tree(entity, data_record, locale)
+      # An edit opens on the language being viewed; a new record starts on
+      # the main language, which holds its required fields.
+      |> mount_multilang(open_on: if(data_record.uuid, do: :viewing_language, else: :primary))
 
     hydrate_data_presence(socket, entity, data_record, form_record_key, current_user)
   end
 
-  # Build the parent-picker options for the current record. Excludes the
-  # row itself and any of its descendants (selecting either would create
-  # a cycle). Trashed rows are excluded — they can't meaningfully be a
-  # parent in the active tree.
-  #
-  # Loads the entity's rows once and feeds both the depth-ordered tree
-  # build and the descendant exclusion — `list_tree/2` +
-  # `descendant_uuids/3` would each load the same set independently.
-  defp assign_parent_options(socket, entity, data_record, locale) do
-    rows = EntityData.list_by_entity(entity.uuid, lang: locale)
-    tree = EntityData.tree_from_rows(rows)
+  # Every level between the module and this form: the entity's records page,
+  # then the record itself. The record has no page of its own (this form is
+  # its data page), so its crumb is text. It names the SAVED record — the
+  # callers refresh it when a save lands, not while a title is being typed.
+  defp data_crumbs(entity, data_record) do
+    entity_crumb = %{
+      label: entity.display_name_plural || entity.display_name,
+      path: Routes.path("/admin/entities/#{entity.name}/data")
+    }
 
-    excluded_uuids =
-      case data_record.uuid do
-        nil -> []
-        uuid -> [uuid | EntityData.descendant_uuids_from_rows(uuid, rows)]
-      end
+    case data_record do
+      %EntityData{uuid: nil} -> [entity_crumb]
+      %EntityData{title: title} -> [entity_crumb, %{label: title}]
+    end
+  end
 
-    options =
-      tree
-      |> Enum.reject(&(&1.record.uuid in excluded_uuids))
-      |> Enum.map(fn %{record: r, depth: d} ->
-        prefix = String.duplicate("— ", d)
-        {prefix <> (r.title || ""), r.uuid}
-      end)
+  defp refresh_page_crumbs(socket) do
+    assign(
+      socket,
+      :page_crumbs,
+      data_crumbs(socket.assigns.entity, socket.assigns.data_record)
+    )
+  end
 
-    assign(socket, :parent_options, options)
+  # A save writes the parent the picker shows (`parent_pick`), never one the
+  # client posted.
+  defp with_parent_pick(data_params, socket) do
+    parent = socket.assigns.parent_pick
+    Map.put(data_params, "parent_uuid", if(parent == Tree.root_id(), do: "", else: parent))
+  end
+
+  # Wherever the form takes a record's state from elsewhere — another
+  # session's edits, a reload after one saved, a promotion from spectator —
+  # the pick follows it; left behind, the next save would silently put the
+  # old parent back.
+  defp sync_parent_pick(socket, record),
+    do: assign(socket, :parent_pick, record.parent_uuid || Tree.root_id())
+
+  # The parent picker's tree for the current record: every live row of the
+  # entity, nested, under a "Top level" row that means no parent. The row
+  # itself and everything under it are left out — picking either would
+  # create a cycle. Trashed rows are left out too; a live row under a
+  # trashed parent moves up to the top.
+  defp assign_parent_tree(socket, entity, data_record, locale) do
+    rows =
+      entity.uuid
+      |> EntityData.list_by_entity(lang: locale)
+      |> Tree.from_flat(node: &%{name: &1.title || ""})
+      |> Tree.prune(List.wrap(data_record.uuid))
+
+    assign(socket,
+      parent_tree: [Tree.root(gettext("Top level"), rows)],
+      parent_pick: data_record.parent_uuid || Tree.root_id()
+    )
   end
 
   defp hydrate_data_presence(socket, entity, data_record, form_record_key, current_user) do
@@ -339,6 +365,8 @@ defmodule PhoenixKitEntities.Web.DataForm do
 
   def handle_event("validate", %{"phoenix_kit_entity_data" => data_params} = params, socket) do
     if socket.assigns[:lock_owner?] do
+      data_params = with_parent_pick(data_params, socket)
+
       socket
       |> track_slug_ownership(params, data_params)
       |> then(&do_validate(data_params, &1))
@@ -362,7 +390,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
 
   def handle_event("save", %{"phoenix_kit_entity_data" => data_params}, socket) do
     if socket.assigns[:lock_owner?] do
-      do_save(data_params, socket)
+      do_save(with_parent_pick(data_params, socket), socket)
     else
       {:noreply, put_flash(socket, :error, gettext("Cannot save - you are spectating"))}
     end
@@ -406,6 +434,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
         socket
         |> assign(:data_record, data_record)
         |> assign(:changeset, changeset)
+        |> assign(:parent_pick, data_record.parent_uuid || Tree.root_id())
         |> put_flash(:info, gettext("Changes reset to last saved state"))
         |> broadcast_data_form_state(extract_changeset_params(changeset))
 
@@ -855,6 +884,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
 
       socket
       |> assign(:data_record, saved_record)
+      |> refresh_page_crumbs()
       |> assign(:changeset, changeset)
       |> put_flash(:info, gettext("Data record saved successfully"))
       |> broadcast_data_form_state(params)
@@ -874,6 +904,27 @@ defmodule PhoenixKitEntities.Web.DataForm do
   end
 
   ## Live updates
+
+  # The parent is the server's (`parent_pick`): the picker shows it and
+  # validate/save take it from here, never from the posted form — a
+  # keystroke sent before a pick's patch still carries the old value.
+  # Spectators do not pick.
+  @impl true
+  def handle_info({TreePicker, "data-parent-picker", id}, socket) do
+    if socket.assigns[:lock_owner?] do
+      socket = assign(socket, :parent_pick, id)
+
+      # Spectators follow the pick at once, not at the next keystroke.
+      params =
+        socket.assigns.changeset
+        |> extract_changeset_params()
+        |> then(&with_parent_pick(&1, socket))
+
+      {:noreply, broadcast_data_form_state(socket, params)}
+    else
+      {:noreply, socket}
+    end
+  end
 
   def handle_info({:media_selected, [file_uuid | _]}, socket) do
     case socket.assigns.media_pick_target do
@@ -938,9 +989,11 @@ defmodule PhoenixKitEntities.Web.DataForm do
         socket =
           socket
           |> assign(:data_record, data_record)
+          |> refresh_page_crumbs()
           |> assign(:form_record_key, data_record.uuid)
           |> assign(:form_record_topic_key, normalize_record_key(data_record.uuid))
           |> assign(:changeset, changeset)
+          |> sync_parent_pick(data_record)
           |> put_flash(
             :info,
             gettext("Record updated in another session. Showing latest changes.")
@@ -1037,7 +1090,9 @@ defmodule PhoenixKitEntities.Web.DataForm do
 
         socket
         |> assign(:data_record, data_record)
+        |> refresh_page_crumbs()
         |> assign(:changeset, EntityData.change(data_record))
+        |> sync_parent_pick(data_record)
         |> assign(:has_unsaved_changes, false)
         |> then(&{:noreply, &1})
       else
@@ -1401,6 +1456,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
         :title,
         :slug,
         :status,
+        :parent_uuid,
         :data,
         :metadata,
         :created_by_uuid
@@ -1417,6 +1473,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
     socket
     |> assign(:data_record, updated_record)
     |> assign(:changeset, validated_changeset)
+    |> sync_parent_pick(updated_record)
     |> assign(:has_unsaved_changes, true)
   end
 
@@ -1437,6 +1494,7 @@ defmodule PhoenixKitEntities.Web.DataForm do
     socket
     |> assign(:entity, entity)
     |> assign(:data_record, data_record)
+    |> refresh_page_crumbs()
     |> assign(:changeset, changeset)
     |> refresh_multilang()
   end
@@ -1445,7 +1503,16 @@ defmodule PhoenixKitEntities.Web.DataForm do
     changeset
     |> Ecto.Changeset.apply_changes()
     |> Map.from_struct()
-    |> Map.take([:entity_uuid, :title, :slug, :status, :data, :metadata, :created_by_uuid])
+    |> Map.take([
+      :entity_uuid,
+      :title,
+      :slug,
+      :status,
+      :parent_uuid,
+      :data,
+      :metadata,
+      :created_by_uuid
+    ])
     |> Enum.into(%{}, fn {key, value} -> {to_string(key), value} end)
   end
 
@@ -1498,21 +1565,12 @@ defmodule PhoenixKitEntities.Web.DataForm do
   end
 
   defp save_data_record(socket, data_params) do
-    opts = actor_opts(socket)
+    opts = Actor.opts(socket)
 
     if socket.assigns.data_record.uuid do
       EntityData.update(socket.assigns.data_record, data_params, opts)
     else
       EntityData.create(data_params, opts)
-    end
-  end
-
-  # Threads the current user UUID through to context functions that
-  # accept `actor_uuid:` opts.
-  defp actor_opts(socket) do
-    case socket.assigns[:phoenix_kit_current_scope] do
-      %{user: %{uuid: uuid}} -> [actor_uuid: uuid]
-      _ -> []
     end
   end
 
@@ -1814,28 +1872,20 @@ defmodule PhoenixKitEntities.Web.DataForm do
 
                   <%!-- Parent (optional, same-entity) --%>
                   <div>
-                    <.label for="phoenix_kit_entity_data_parent_uuid">{gettext("Parent")}</.label>
-                    <label class="select w-full">
-                      <select
-                        id="phoenix_kit_entity_data_parent_uuid"
-                        name="phoenix_kit_entity_data[parent_uuid]"
-                        disabled={@readonly?}
-                      >
-                        <option value="" selected={
-                          is_nil(Ecto.Changeset.get_field(@changeset, :parent_uuid))
-                        }>
-                          {gettext("— None (top level) —")}
-                        </option>
-                        <%= for {label, value} <- @parent_options do %>
-                          <option
-                            value={value}
-                            selected={Ecto.Changeset.get_field(@changeset, :parent_uuid) == value}
-                          >
-                            {label}
-                          </option>
-                        <% end %>
-                      </select>
-                    </label>
+                    <.label>{gettext("Parent")}</.label>
+                    <.live_component
+                      module={TreePicker}
+                      id="data-parent-picker"
+                      tree={@parent_tree}
+                      value={
+                        if @readonly?,
+                          do: Ecto.Changeset.get_field(@changeset, :parent_uuid) || Tree.root_id(),
+                          else: @parent_pick
+                      }
+                      field
+                      disabled={@readonly?}
+                      name="phoenix_kit_entity_data[parent_uuid]"
+                    />
                     <%= if (msg = parent_uuid_error(@changeset)) do %>
                       <p class="mt-1 text-sm text-error">{msg}</p>
                     <% end %>
@@ -1973,28 +2023,20 @@ defmodule PhoenixKitEntities.Web.DataForm do
 
                   <%!-- Parent (optional, same-entity) --%>
                   <div>
-                    <.label for="phoenix_kit_entity_data_parent_uuid">{gettext("Parent")}</.label>
-                    <label class="select w-full">
-                      <select
-                        id="phoenix_kit_entity_data_parent_uuid"
-                        name="phoenix_kit_entity_data[parent_uuid]"
-                        disabled={@readonly?}
-                      >
-                        <option value="" selected={
-                          is_nil(Ecto.Changeset.get_field(@changeset, :parent_uuid))
-                        }>
-                          {gettext("— None (top level) —")}
-                        </option>
-                        <%= for {label, value} <- @parent_options do %>
-                          <option
-                            value={value}
-                            selected={Ecto.Changeset.get_field(@changeset, :parent_uuid) == value}
-                          >
-                            {label}
-                          </option>
-                        <% end %>
-                      </select>
-                    </label>
+                    <.label>{gettext("Parent")}</.label>
+                    <.live_component
+                      module={TreePicker}
+                      id="data-parent-picker"
+                      tree={@parent_tree}
+                      value={
+                        if @readonly?,
+                          do: Ecto.Changeset.get_field(@changeset, :parent_uuid) || Tree.root_id(),
+                          else: @parent_pick
+                      }
+                      field
+                      disabled={@readonly?}
+                      name="phoenix_kit_entity_data[parent_uuid]"
+                    />
                     <%= if (msg = parent_uuid_error(@changeset)) do %>
                       <p class="mt-1 text-sm text-error">{msg}</p>
                     <% end %>
